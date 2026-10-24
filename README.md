@@ -83,8 +83,7 @@ npx electron-builder --mac dmg      # 需在 macOS 上执行
 - Windows 安装器：默认安装到 `D:\DesktopPet`；模型可提取到**安装目录外部 `models/`** 便于增删
 
 ## 模型
-本仓库**不随附任何第三方角色模型**。请把模型放入 `web/models/<名称>-cubism<2|4>/` 并在
-`web/models/models.json` 登记，或直接在应用内使用「外部模型文件夹」。
+本仓库**随附一组角色模型**（位于 `web/models/`，共 24 个，已在 `web/models/models.json` 登记；**版权归各自原作者**，许可与再分发要求详见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)）。此外仍可通过应用内「外部模型文件夹」加载任意磁盘位置的模型。
 
 - **内置位置**：`web/models/<名称>-cubism<2|4>/`（由 `models.json` 登记）
 - **外部模型文件夹**：应用内「设置 → 外部模型文件夹」可选择任意磁盘目录（可多个），增删即时生效

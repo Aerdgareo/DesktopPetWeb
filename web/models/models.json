@@ -1,4 +1,149 @@
 {
-  "_readme": "桌宠模型清单。字段：id(可选)、name(显示名)、url(必填)、type(可选，Cubism2/Cubism4，留空则按运行时自动识别)。url 为相对 web/ 的路径或 http(s) 绝对地址。本仓库不随附任何第三方角色模型；请把模型放入 web/models/<名称>-cubism<2|4>/ 并在下面登记，或使用应用内“外部模型文件夹”。",
-  "models": []
+  "_readme": "桌宠模型清单。字段：id(可选)、name(显示名)、url(必填)、type(可选，Cubism2/Cubism4，留空则按运行时自动识别)。url 为相对 web/ 的路径或 http(s) 绝对地址。本仓库随附下列角色模型（版权归各自原作者，许可与再分发要求详见 THIRD-PARTY-NOTICES.md）；也可用应用内“外部模型文件夹”加载更多。",
+  "models": [
+    {
+      "id": "aierdeliqi_4-cubism4",
+      "name": "aierdeliqi_4",
+      "url": "models/aierdeliqi_4-cubism4/aierdeliqi_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "aierdeliqi_5-cubism4",
+      "name": "aierdeliqi_5",
+      "url": "models/aierdeliqi_5-cubism4/aierdeliqi_5.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "biaoqiang-cubism4",
+      "name": "biaoqiang",
+      "url": "models/biaoqiang-cubism4/biaoqiang.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "biaoqiang_3-cubism4",
+      "name": "biaoqiang_3",
+      "url": "models/biaoqiang_3-cubism4/biaoqiang_3.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "chuixue_3-cubism4",
+      "name": "chuixue_3",
+      "url": "models/chuixue_3-cubism4/chuixue_3.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "dujiaoshou_4-cubism4",
+      "name": "dujiaoshou_4",
+      "url": "models/dujiaoshou_4-cubism4/dujiaoshou_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "lafei-cubism4",
+      "name": "lafei",
+      "url": "models/lafei-cubism4/lafei.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "lafei_4-cubism4",
+      "name": "lafei_4",
+      "url": "models/lafei_4-cubism4/lafei_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "lingbo-cubism4",
+      "name": "lingbo",
+      "url": "models/lingbo-cubism4/lingbo.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "miku-cubism4",
+      "name": "miku",
+      "url": "models/miku-cubism4/miku.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "mingshi-cubism4",
+      "name": "mingshi",
+      "url": "models/mingshi-cubism4/mingshi.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "ninghai_4-cubism4",
+      "name": "ninghai_4",
+      "url": "models/ninghai_4-cubism4/ninghai_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "pinghai_4-cubism4",
+      "name": "pinghai_4",
+      "url": "models/pinghai_4-cubism4/pinghai_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "shengluyisi_3-cubism4",
+      "name": "shengluyisi_3",
+      "url": "models/shengluyisi_3-cubism4/shengluyisi_3.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "sipeibojue_5-cubism4",
+      "name": "sipeibojue_5",
+      "url": "models/sipeibojue_5-cubism4/sipeibojue_5.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "taiyuan_2-cubism4",
+      "name": "taiyuan_2",
+      "url": "models/taiyuan_2-cubism4/taiyuan_2.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "xianghe_2-cubism4",
+      "name": "xianghe_2",
+      "url": "models/xianghe_2-cubism4/xianghe_2.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "xixuegui_4-cubism4",
+      "name": "xixuegui_4",
+      "url": "models/xixuegui_4-cubism4/xixuegui_4.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "yichui_2-cubism4",
+      "name": "yichui_2",
+      "url": "models/yichui_2-cubism4/yichui_2.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "z46_2-cubism4",
+      "name": "z46_2",
+      "url": "models/z46_2-cubism4/z46_2.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "樱花miku-cubism4",
+      "name": "樱花miku",
+      "url": "models/樱花miku-cubism4/樱花miku.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "老肥牛-cubism4",
+      "name": "老肥牛",
+      "url": "models/老肥牛-cubism4/hiyori_pro_mic.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "肥牛-cubism4",
+      "name": "肥牛",
+      "url": "models/肥牛-cubism4/feiniu.model3.json",
+      "type": "Cubism4"
+    },
+    {
+      "id": "重音-cubism4",
+      "name": "重音",
+      "url": "models/重音-cubism4/重音.model3.json",
+      "type": "Cubism4"
+    }
+  ]
 }

@@ -1,0 +1,28 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "重音.moc3",
+		"Textures": [
+			"重音.8192/texture_00.png",
+			"重音.8192/texture_01.png",
+			"重音.8192/texture_02.png"
+		],
+		"Physics": "重音.physics3.json",
+		"DisplayInfo": "重音.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		}
+	]
+}

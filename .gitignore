@@ -8,6 +8,4 @@ dist-slim/
 web/vendor/live2d.min.js
 web/vendor/live2dcubismcore.min.js
 
-# 第三方/个人角色模型（版权归原作者，勿提交）
-web/models/*
-!web/models/models.json
+# 角色模型：本仓库随附分发（版权归各自原作者，许可与再分发要求详见 THIRD-PARTY-NOTICES.md）
