@@ -4,7 +4,7 @@
   "description": "跨平台桌面宠物 —— Electron 外壳，承载共享的 web/ 前端（透明、无边框、置顶、鼠标逐区穿透）",
   "main": "electron/main.js",
   "private": true,
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "start": "electron electron/main.js",
     "dist": "electron-builder",
@@ -49,7 +49,7 @@
       ],
       "category": "Utility",
       "synopsis": "跨平台桌面宠物",
-      "maintainer": "chongou469"
+      "maintainer": "Aerdgareo"
     },
     "asar": true,
     "nsis": {
@@ -61,10 +61,13 @@
     },
     "copyright": "Copyright © 2026 DesktopPetWeb contributors"
   },
-  "author": "chongou469",
-  "homepage": "https://github.com/chongou469/DesktopPetWeb",
+  "author": "Aerdgareo",
+  "homepage": "https://github.com/Aerdgareo/DesktopPetWeb",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chongou469/DesktopPetWeb.git"
+    "url": "https://github.com/Aerdgareo/DesktopPetWeb.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Aerdgareo/DesktopPetWeb/issues"
   }
 }

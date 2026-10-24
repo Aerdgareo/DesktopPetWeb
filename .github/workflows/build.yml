@@ -1,6 +1,12 @@
 name: build
 
 # 触发：打 tag(v*) 时构建并发布 Release；也可在 Actions 页面手动触发
+#
+# 发布形态：同一次 GitHub Release 承载「两个附件」
+#   ① 主程序安装包（Win NSIS / macOS dmg / Linux AppImage+deb）—— 由本工作流 CI 构建并自动上传
+#   ② 模型安装包 DesktopPetModels-Setup.exe（约 189MB，含 24 个 Live2D 模型）
+#      —— 不进 git 仓库、也不在 CI 内构建（无模型源，且属第三方/个人模型），
+#         须由人工手动上传到同一 Release（详见仓库 .github/RELEASE.md）。
 on:
   push:
     tags: ['v*']
@@ -56,11 +62,44 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      # 汇总三平台构建产物（各平台一个 artifact 子目录，落到 artifacts/ 下）
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Create Release
+
+      # ── 创建 Release：主程序安装包（CI 构建、三平台）作为附件自动上传 ──
+      #   files: artifacts/**/* 覆盖 win(nsis .exe)/mac(.dmg)/linux(.AppImage/.deb) 的**全部**产物，
+      #   它们被汇总到**同一个** Release，满足“主程序附件”形态。
+      - name: Create Release (main installers)
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          # 自定义说明文本（配合 generate_release_notes 时，body 会“前置”在自动生成的 notes 之前），
+          # 传达“两个附件”形态与源码/GPLv3 合规信息。
+          # 注：本 action 的 append_body 是布尔开关（非文本），此处按官方语义使用 body。
+          body: |
+            ---
+            ### 发行附件（同一 Release 承载两个附件）
+            1. **主程序安装包**（本工作流 CI 自动构建并上传）：
+               - Windows：`DesktopPetWeb Setup <version>.exe`（NSIS）
+               - macOS：`DesktopPetWeb-<version>.dmg`
+               - Linux：`DesktopPetWeb-<version>.AppImage`、`desktop-pet-web_<version>_amd64.deb`
+            2. **模型安装包** `DesktopPetModels-Setup.exe`（含 24 个 Live2D 模型，约 189 MB）：
+               - 该包体积大且需纳入第三方/个人模型，**不纳入 git 仓库、也不在 CI 中构建**，需**人工手动上传到本 Release**；
+               - 上传后会出现在本页 “Assets” 列表中（详见仓库 `.github/RELEASE.md`）。
+               - Web 界面上传：在本 Release 编辑页 “Attach binaries by dropping them here or selecting them” 选择 `DesktopPetModels-Setup.exe`。
+               - 命令行上传：`gh release upload <tag> DesktopPetModels-Setup.exe`
+
+            ### 源码与许可（GPL-3.0-or-later）
+            本项目自身源码以 **GPL-3.0-or-later** 授权。按 GPLv3（第 6 条），分发二进制须同时提供**对应源码**：
+            源码见本仓库对应 tag 快照，亦可直接下载本 Release 的 “Source code (zip/tar.gz)”。
+            第三方组件 / Live2D 内核 / 示例模型 / 用户导入模型的授权边界见 `THIRD-PARTY-NOTICES.md`。
+
+      # ── 模型安装包（DesktopPetModels-Setup.exe）——由人工手动附加，**不在 CI 构建/上传** ──
+      #   原因：约 189MB，含第三方/个人 Live2D 模型（版权受限），既不进仓库，也无 CI 内可用的模型源。
+      #   手动方式（二选一）：
+      #     a) GitHub Web：Release 编辑页 → “Attach binaries” → 选择 DesktopPetModels-Setup.exe → Update release
+      #     b) 命令行：  gh release upload <tag> /path/to/DesktopPetModels-Setup.exe
+      #   说明：本注释为“可选人工步骤”的占位说明，不执行任何构建；
+      #         若日后存在带凭据的自动化流程（能取到模型包），可在此处新增 `gh release upload` 步骤。

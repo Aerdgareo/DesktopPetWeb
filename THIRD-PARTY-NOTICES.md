@@ -1,8 +1,14 @@
 # 第三方组件与素材声明（Third-Party Notices）
 
-本仓库源码（`electron/`、`web/src/` 等）以 **MIT** 授权（见 `LICENSE`）。
-但本项目**运行与展示依赖以下第三方组件/素材**，它们**不适用 MIT**，各自遵循其原始许可。
+本仓库源码（`electron/`、`web/src/` 等）以 **GPL-3.0-or-later**（GNU General Public License v3.0 or later）授权（见 `LICENSE`）。
+但本项目**运行与展示依赖以下第三方组件/素材**，它们**不受 GPL-3.0-or-later 约束**，各自遵循其原始许可。
 分发（尤其是打包发行版）时请**保留**这些声明，并遵守各自条款。
+
+## 本项目自身源码的许可与分发义务（GPL-3.0-or-later）
+- 本仓库**自身源码**（`electron/`、`web/src/` 等，**不含**下列第三方组件/素材）以 **GPL-3.0-or-later**（GNU General Public License v3.0 or later）授权，全文见 `LICENSE`。
+- **分发二进制（安装包）须同时提供对应源码**：依据 GPLv3 第 3 条与第 6 条，当你以安装包、可执行文件等形式分发本项目（即“传达”目标代码）时，**必须一并提供其完整的“对应源码”（Corresponding Source）**，或以 GPLv3 允许的书面承诺方式提供之。
+- **源码获取位置**：`https://github.com/Aerdgareo/DesktopPetWeb`。请在 Release 说明或安装包随附文档中给出该链接（或 `git clone` 地址），确保接收者能取得与二进制版本完全对应的源码。
+- 上述分发义务**仅适用于本项目自身源码**；下列第三方组件/素材仍各自遵循其原始许可。
 
 ## 1. Live2D Cubism 运行库（**专有许可，务必阅读**）
 - `web/vendor/live2dcubismcore.min.js` —— **Live2D Cubism Core（Cubism 4/5）**
@@ -38,5 +44,6 @@
 ## 建议做法（公开发行前）
 1. 仓库中**只保留源码 + 构建脚本**，**不内置**第三方 Core（`web/vendor/*` 视情况）与任何**未获授权**的模型；
    - 若必须内置 Live2D Core 以便离线运行，请**同时**附上 Live2D 的许可文件与标识声明。
-2. 将可执行安装包（Windows/macOS/Linux）放到 **GitHub Releases**，不要提交进 Git 历史。
+2. 将可执行安装包（Windows/macOS/Linux）放到 **GitHub Releases**，不要提交进 Git 历史；
+   - **GPLv3 合规**：随 Release **同时提供对应源码**（给出源码仓库链接，或附上对应版本的源码归档），以满足“分发二进制须提供对应源码”的义务。
 3. 在 README 的「致谢 / Credits」中列出 Live2D、Electron、PixiJS 及模型作者。
