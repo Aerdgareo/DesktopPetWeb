@@ -7,43 +7,59 @@
 > 为什么用 Web 而不是 Unity：Unity 的 Cubism SDK 5 **不支持 Cubism 2 代模型**；
 > 而 `pixi-live2d-display` **一套代码同时支持 2 代与 4 代**。
 
-## 功能特性
-- 透明 / 无边框 / 置顶窗口；**鼠标逐区穿透**（仅人物与设置面板上可点，其余点击穿透到桌面）
-- **同时支持 Cubism 2 代与 4 代**模型，自动识别
-- 视线跟随（以人物**头部**为参照中心）、拖拽（仅命中模型本体）、点击反应（表情/动作）
-- 待机动作（未声明动作时**扫描目录**自动补齐）
-- **外部模型文件夹**：可添加**多个**外部目录，不改程序即可加载任意磁盘位置的模型
-- 设置面板：缩放（10%–300%）、模型切换、表情/动作选择、置顶/穿透、导入模型、退出
-- 系统托盘：显示/隐藏、置顶、开机自启、退出
-- Windows 安装器：默认安装到 `D:\DesktopPet`；模型可提取到**安装目录外部 `models/`** 便于增删
+---
 
-## 环境要求
+## 食用发行版（普通用户）
+
+> 只想直接使用桌宠、不涉及开发——看这一节就够了。
+
+### 下载与安装
+
+到本仓库 **[Releases](https://github.com/Aerdgareo/DesktopPetWeb/releases)** 页面下载对应平台安装包，**无需任何开发环境**：
+
+| 平台 | 安装包 | 使用方式 |
+|---|---|---|
+| Windows | `DesktopPetWeb Setup x.y.z.exe`（NSIS） | 双击安装，默认装到 `D:\DesktopPet`，从开始菜单 / 安装目录启动 |
+| Linux | `DesktopPetWeb-x.y.z.AppImage` / `desktop-pet-web_x.y.z_amd64.deb` | AppImage：`chmod +x` 后直接运行；deb：`sudo dpkg -i xxx.deb` |
+| macOS | `DesktopPetWeb-x.y.z.dmg` | 打开 dmg，将 App 拖入「应用程序」（由 CI 构建） |
+
+> 同一个 Release 还附带**模型安装包 `DesktopPetModels-Setup.exe`**（内含一批 Live2D 模型）。
+
+### 获取模型（来自 `DesktopPetModels-Setup.exe`）
+
+- **Windows**：直接双击 `DesktopPetModels-Setup.exe` 安装，按向导把模型安装到目标目录（默认安装到程序目录外部的 `models/`）。
+- **Linux / macOS**：**无需安装，用压缩软件（如 7-Zip / Keka / 归档实用工具）直接打开 `DesktopPetModels-Setup.exe`，从中提取 `model` 相关文件即可**——该安装包本质是可解压的归档，提取出的模型目录即可直接使用。
+
+### 加载模型
+
+启动应用后，打开**设置面板 →「外部模型文件夹」**，选择存放模型的目录（可添加多个，增删即时生效）即可显示模型。
+模型入口为 `.model3.json`（Cubism 4）或 `.model.json`（Cubism 2）；未声明动作/表情时会自动扫描目录补齐。
+
+---
+
+## 源码版（开发者）
+
+> 想从源码构建、二次开发或自行打包——看这一节。普通用户无需阅读。
+
+### 环境要求
 - Node.js ≥ 18（推荐 20），npm
 - 无需联网运行（运行时库已本地化到 `web/vendor/`）
 
-## 首次准备：拉取运行时库（Live2D 内核）
+### 首次准备：拉取运行时库（Live2D 内核）
 本仓库**不随附** Live2D Cubism 内核（专有许可，见 `THIRD-PARTY-NOTICES.md`）。首次开发/构建前执行：
 ```bash
 npm run fetch-vendor      # 下载 live2dcubismcore.min.js / live2d.min.js 到 web/vendor/
 ```
 （`pixi.min.js`、`pixi-live2d-display.min.js` 为 MIT，已随仓库提供。）
 
-## 模型
-本仓库**不随附任何第三方角色模型**。请把模型放入 `web/models/<名称>-cubism<2|4>/` 并在
-`web/models/models.json` 登记，或直接在应用内使用「外部模型文件夹」。
-
-- **内置位置**：`web/models/<名称>-cubism<2|4>/`（由 `models.json` 登记）
-- **外部模型文件夹**：应用内「设置 → 外部模型文件夹」可选择任意磁盘目录（可多个），增删即时生效
-- **模型入口**：`.model3.json`（Cubism 4）或 `.model.json`（Cubism 2）；未声明动作/表情时会自动扫描目录补齐
-
-## 本地开发运行
+### 本地开发运行
 ```bash
 npm install
 npm start
 ```
 > 若终端设置了 `ELECTRON_RUN_AS_NODE`，请先清除：`env -u ELECTRON_RUN_AS_NODE npm start`
 
-## 打包
+### 打包
 ```bash
 npm run dist                 # 当前平台
 npx electron-builder --win   # Windows (nsis)
@@ -54,6 +70,25 @@ npx electron-builder --mac dmg      # 需在 macOS 上执行
 > 如需在本机进行离线 Windows 构建，请在开发仓库 `DesktopPetWeb` 中操作；本仓库 CI（见 `.github/workflows/build.yml`）由 electron-builder 自行下载对应平台的 Electron，**无需**该配置项。
 > macOS 安装包（dmg）**必须在 macOS 上**构建（签名/证书），Windows 无法交叉构建。
 
+---
+
+## 功能特性
+- 透明 / 无边框 / 置顶窗口；**鼠标逐区穿透**（仅人物与设置面板上可点，其余点击穿透到桌面）
+- **同时支持 Cubism 2 代与 4 代**模型，自动识别
+- 视线跟随（以人物**头部**为参照中心）、拖拽（仅命中模型本体）、点击反应（表情/动作）
+- 待机动作（未声明动作时**扫描目录**自动补齐）
+- **外部模型文件夹**：可添加**多个**外部目录，不改程序即可加载任意磁盘位置的模型
+- 设置面板：缩放（10%–300%）、模型切换、表情/动作选择、置顶/穿透、导入模型、退出
+- 系统托盘：显示/隐藏、置顶、开机自启、退出
+- Windows 安装器：默认安装到 `D:\DesktopPet`；模型可提取到**安装目录外部 `models/`** 便于增删
+
+## 模型
+本仓库**不随附任何第三方角色模型**。请把模型放入 `web/models/<名称>-cubism<2|4>/` 并在
+`web/models/models.json` 登记，或直接在应用内使用「外部模型文件夹」。
+
+- **内置位置**：`web/models/<名称>-cubism<2|4>/`（由 `models.json` 登记）
+- **外部模型文件夹**：应用内「设置 → 外部模型文件夹」可选择任意磁盘目录（可多个），增删即时生效
+- **模型入口**：`.model3.json`（Cubism 4）或 `.model.json`（Cubism 2）；未声明动作/表情时会自动扫描目录补齐
 
 ## 许可与第三方
 - 本仓库**源码**：**GPL-3.0-or-later**（GNU General Public License v3.0 or later，见 [`LICENSE`](LICENSE)）
@@ -74,3 +109,4 @@ npx electron-builder --mac dmg      # 需在 macOS 上执行
 
 ## 致谢
 - [Live2D Cubism](https://www.live2d.com/) · [pixi-live2d-display](https://github.com/guansss/pixi-live2d-display) · [PixiJS](https://pixijs.com/) · [Electron](https://www.electronjs.org/)
+- [Cutiei/-live2d](https://github.com/Cutiei/-live2d) —— 感谢其提供的 Live2D 相关资源 / 模型支持
