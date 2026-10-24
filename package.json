@@ -1,0 +1,70 @@
+{
+  "name": "desktop-pet-web",
+  "version": "1.0.0",
+  "description": "跨平台桌面宠物 —— Electron 外壳，承载共享的 web/ 前端（透明、无边框、置顶、鼠标逐区穿透）",
+  "main": "electron/main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "electron electron/main.js",
+    "dist": "electron-builder",
+    "fetch-vendor": "node scripts/fetch-vendor.mjs"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.desktoppet.web",
+    "productName": "DesktopPetWeb",
+    "files": [
+      "build/tray.png",
+      "electron/**/*",
+      "web/**/*",
+      "!web/models/**",
+      "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "web/models",
+        "to": "models"
+      }
+    ],
+    "win": {
+      "target": [
+        "dir",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "identity": null,
+      "category": "public.app-category.entertainment"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "synopsis": "跨平台桌面宠物",
+      "maintainer": "chongou469"
+    },
+    "asar": true,
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "copyright": "Copyright © 2026 DesktopPetWeb contributors"
+  },
+  "author": "chongou469",
+  "homepage": "https://github.com/chongou469/DesktopPetWeb",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chongou469/DesktopPetWeb.git"
+  }
+}

@@ -1,0 +1,13 @@
+# 依赖与产物
+node_modules/
+dist/
+dist-slim/
+*.log
+
+# Live2D 内核（由 `npm run fetch-vendor` 拉取，不随仓库分发；见 THIRD-PARTY-NOTICES.md）
+web/vendor/live2d.min.js
+web/vendor/live2dcubismcore.min.js
+
+# 第三方/个人角色模型（版权归原作者，勿提交）
+web/models/*
+!web/models/models.json

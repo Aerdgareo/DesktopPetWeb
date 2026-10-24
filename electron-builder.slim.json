@@ -1,0 +1,30 @@
+{
+  "appId": "com.desktoppet.lite",
+  "productName": "DesktopPetLite",
+  "directories": {
+    "output": "dist-slim"
+  },
+  "electronDist": "node_modules/electron/dist",
+  "asar": true,
+  "files": [
+    "build/tray.png",
+    "electron/**/*",
+    "web/index.html",
+    "web/src/**/*",
+    "web/vendor/**/*",
+    "!web/models/**",
+    "package.json"
+  ],
+  "win": {
+    "target": [
+      "dir",
+      "nsis"
+    ],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": false,
+    "include": "build/installer.nsh"
+  }
+}
