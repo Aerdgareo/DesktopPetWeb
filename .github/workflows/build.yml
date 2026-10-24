@@ -25,6 +25,8 @@ jobs:
             target: --win nsis
           - os: macos-latest
             target: --mac dmg
+          - os: macos-13
+            target: --mac dmg
           - os: ubuntu-latest
             target: --linux AppImage deb
     runs-on: ${{ matrix.os }}
@@ -83,7 +85,7 @@ jobs:
             ### 发行附件（同一 Release 承载两个附件）
             1. **主程序安装包**（本工作流 CI 自动构建并上传）：
                - Windows：`DesktopPetWeb Setup <version>.exe`（NSIS）
-               - macOS：`DesktopPetWeb-<version>.dmg`
+               - macOS：`DesktopPetWeb-<version>.dmg`（x64，Intel）/ `DesktopPetWeb-<version>-arm64.dmg`（Apple Silicon）
                - Linux：`DesktopPetWeb-<version>.AppImage`、`desktop-pet-web_<version>_amd64.deb`
             2. **模型安装包** `DesktopPetModels-Setup.exe`（含 24 个 Live2D 模型，约 189 MB）：
                - 该包体积大且需纳入第三方/个人模型，**不纳入 git 仓库、也不在 CI 中构建**，需**人工手动上传到本 Release**；
