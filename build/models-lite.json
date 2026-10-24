@@ -1,0 +1,11 @@
+{
+  "_readme": "Lite 版随附模型清单：安装后外部 models/ 目录仅含「肥牛」这一个模型。字段同 web/models/models.json。",
+  "models": [
+    {
+      "id": "肥牛-cubism4",
+      "name": "肥牛",
+      "url": "models/肥牛-cubism4/feiniu.model3.json",
+      "type": "Cubism4"
+    }
+  ]
+}

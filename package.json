@@ -26,8 +26,12 @@
     ],
     "extraFiles": [
       {
-        "from": "web/models",
-        "to": "models"
+        "from": "web/models/肥牛-cubism4",
+        "to": "models/肥牛-cubism4"
+      },
+      {
+        "from": "build/models-lite.json",
+        "to": "models/models.json"
       }
     ],
     "win": {
