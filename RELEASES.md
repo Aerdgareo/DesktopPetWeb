@@ -9,7 +9,7 @@
 - **Release 页**：https://github.com/Aerdgareo/DesktopPetWeb/releases/tag/v1.0.0
 - **源码**
   - Git tag：`v1.0.0`
-  - 对应提交：`15285b6`
+  - 对应提交：`27889cf`（含 lite 打包配置与 macOS `arm64+x64` 交叉构建）
   - GitHub 自动附带源码归档：`Source code (zip)` / `Source code (tar.gz)`
   - 许可：**GPL-3.0-or-later**（按 GPLv3，分发二进制须同时提供对应源码）
 - **发行产物（6 个附件）**
