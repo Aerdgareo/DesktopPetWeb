@@ -24,9 +24,7 @@ jobs:
           - os: windows-latest
             target: --win nsis
           - os: macos-latest
-            target: --mac dmg
-          - os: macos-13
-            target: --mac dmg
+            target: --mac dmg --arm64 --x64
           - os: ubuntu-latest
             target: --linux AppImage deb
     runs-on: ${{ matrix.os }}
