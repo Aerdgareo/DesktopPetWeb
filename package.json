@@ -1,6 +1,6 @@
 {
   "name": "desktop-pet-web",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "跨平台桌面宠物 —— Electron 外壳，承载共享的 web/ 前端（透明、无边框、置顶、鼠标逐区穿透）",
   "main": "electron/main.js",
   "private": true,

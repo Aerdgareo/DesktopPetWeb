@@ -34,11 +34,13 @@
 
 !ifndef BUILD_UNINSTALLER
 Var PetDirDefaulted
-; 允许用户修改安装目录；并在离开目录页时把「DesktopPet」补到所选路径末尾
+; 允许用户修改安装目录；并在安装前(INSTFILES 页 PRE)把「DesktopPet」补到所选路径末尾
 !macro customPageAfterChangeDir
   !define MUI_PAGE_CUSTOMFUNCTION_PRE PetDirPagePre
-  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE PetDirPageLeave
   !insertmacro MUI_PAGE_DIRECTORY
+  ; 关键：目录页的 LEAVE 无效（electron-builder 注释：$INSTDIR 在自定义 leave 之后才更新）。
+  ;   紧随本宏之后，模板会插入 MUI_PAGE_INSTFILES —— 在此定义其 PRE；届时 $INSTDIR 已是最终值。
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE PetInstFilesPre
 !macroend
 Function PetDirPagePre
   ${If} $PetDirDefaulted != "1"
@@ -51,9 +53,9 @@ Function PetDirPagePre
     ${EndIf}
   ${EndIf}
 FunctionEnd
-; 离开目录页：若用户所选路径的最后一级目录不是 DesktopPet，则追加 \DesktopPet 子目录
-;   （例：用户选 D:\Games → 实际安装到 D:\Games\DesktopPet；选 D:\DesktopPet → 保持不变）
-Function PetDirPageLeave
+; 安装前：若所选路径的最后一级目录不是 DesktopPet，则追加 \DesktopPet
+;   （例：R:\ → R:\DesktopPet；D:\Games → D:\Games\DesktopPet；D:\DesktopPet → 保持不变）
+Function PetInstFilesPre
   ${GetFileName} $0 "$INSTDIR"
   ${If} $0 != "DesktopPet"
     StrCpy $INSTDIR "$INSTDIR\DesktopPet"

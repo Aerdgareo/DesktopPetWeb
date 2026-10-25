@@ -260,28 +260,42 @@ function setAlpha(alpha) {
 function setScalePercent(percent) {
   state.options.scalePercent = clamp(Number(percent) || 0, 1, 1000);
 
-  // 关键：缩放不应把人物拉回屏幕中心（用户反馈）。
-  //   记录缩放前「人物的可见中心」（全局坐标），缩放后平移模型使该中心保持不动 —— 即「围绕人物中心缩放」。
+  // 目标：缩放「以人物可见中心为原点、不改变人物屏幕位置」。
+  // 做法：记录缩放前的人物可见中心（stage 全局）与旧缩放 s0、原点 (x0,y0)；
+  //   内容中心相对原点的「局部偏移」cLocal = (center - 原点)/s0 不随缩放变化，
+  //   故令新原点 = 原屏幕中心 - cLocal*s1，即可解析式保持屏幕中心不动（不依赖二次测量）。
   const model = state.model;
-  let before = null;
-  if (model) { try { before = getContentBounds(model, true); } catch (_) { before = null; } }
+  const app = state.app;
+  if (!model) { fitToWindow({ preservePosition: true }); return; }
 
-  fitToWindow({ preservePosition: true });
+  const s0 = model.scale ? model.scale.x : 1;
+  const x0 = model.x;
+  const y0 = model.y;
+  let c0 = null;
+  try { c0 = getContentBounds(model, true); } catch (_) { c0 = null; }
 
-  if (model && before && before.width > 0 && before.height > 0) {
-    let after = null;
-    try { after = getContentBounds(model, true); } catch (_) { after = null; }
-    if (after && after.width > 0 && after.height > 0) {
-      const dx = (before.x + before.width / 2) - (after.x + after.width / 2);
-      const dy = (before.y + before.height / 2) - (after.y + after.height / 2);
-      const screen = state.app && state.app.renderer && state.app.renderer.screen;
-      const W = screen ? Math.max(1, screen.width) : null;
-      const H = screen ? Math.max(1, screen.height) : null;
-      model.x = (W ? clamp(model.x + dx, 0, W) : model.x + dx);
-      model.y = (H ? clamp(model.y + dy, 0, H) : model.y + dy);
-      try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
+  fitToWindow({ preservePosition: true }); // 设定新 scale（x/y 暂被夹取，随后我们按中心回推）
+
+  if (c0 && c0.width > 0 && c0.height > 0 && s0 > 0) {
+    const centerX0 = c0.x + c0.width / 2;
+    const centerY0 = c0.y + c0.height / 2;
+    const s1 = model.scale ? model.scale.x : s0;
+    const cLocalX = (centerX0 - x0) / s0;
+    const cLocalY = (centerY0 - y0) / s0;
+    model.x = centerX0 - cLocalX * s1;
+    model.y = centerY0 - cLocalY * s1;
+    const screen = app && app.renderer && app.renderer.screen;
+    if (screen) {
+      const W = Math.max(1, screen.width);
+      const H = Math.max(1, screen.height);
+      // 宽松夹取：允许小幅越界，避免又把人拉回而破坏「中心不动」
+      model.x = clamp(model.x, -W, 2 * W);
+      model.y = clamp(model.y, -H, 2 * H);
     }
   }
+
+  try { if (typeof model.updateTransform === 'function') model.updateTransform(); } catch (_) { /* 忽略 */ }
+  try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
 }
 
 /** 读取当前缩放百分比（供滚轮缩放等增量调节使用） */

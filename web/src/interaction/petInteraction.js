@@ -92,11 +92,11 @@ function createPetInteraction(deps) {
       ? hitAreas.length > 0
       : !!(hitAreas && Object.keys(hitAreas).length > 0);
 
-    // 2) 模型定义了 hit areas：仅以 hit areas 判定可点（hit areas 本身即贴合人物本体）。
-    //    人物轮廓外（含画布内空白）一律穿透。
-    if (hasHitAreas) return false;
+    // 2) 即便模型定义了 hit areas，也可能只覆盖局部（如「肥牛」的 HitArea 只圈住身体）。
+    //    用户要求「整只可见人物」都可拖 → 不再一刀切 return false，继续用「绘制内容包围盒」兜底
+    //    （仍在人物绘制范围内，而非整块画布的透明空白）。
 
-    // 3) 模型未定义 hit areas（实测导入的 lafei_4 / 重音 / 樱花miku）：改用「绘制内容包围盒」，
+    // 3) 用「绘制内容包围盒」（对声明/未声明 hit areas 的模型都生效），
     //    而非整块画布 getBounds()（画布含大量透明留白 → 曾导致可交互矩形明显偏大/偏移）。
     if (typeof modelLoaderRef.getContentBounds === 'function') {
       try {
