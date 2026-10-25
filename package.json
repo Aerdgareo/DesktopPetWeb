@@ -58,7 +58,8 @@
     "asar": true,
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": false,
+      "include": "build/installer.nsh"
     },
     "directories": {
       "output": "dist"
