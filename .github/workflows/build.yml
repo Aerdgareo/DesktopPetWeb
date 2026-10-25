@@ -21,11 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows 拆分为两个独立安装包（x64 / x86），不合并为单一双架构安装器
           - os: windows-latest
-            target: --win nsis --x64 --ia32
+            tag: win-x64
+            target: --win nsis --x64
+          - os: windows-latest
+            tag: win-x86
+            target: --win nsis --ia32
           - os: macos-latest
+            tag: mac
             target: --mac dmg --arm64 --x64
           - os: ubuntu-latest
+            tag: linux
             target: --linux AppImage deb
     runs-on: ${{ matrix.os }}
     env:
@@ -49,7 +56,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: DesktopPetWeb-${{ matrix.os }}
+          name: DesktopPetWeb-${{ matrix.tag }}
           path: |
             dist/*.exe
             dist/*.dmg
