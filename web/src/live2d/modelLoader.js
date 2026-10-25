@@ -377,6 +377,8 @@ async function doLoad(url, loadOptions) {
   model.autoUpdate = o.autoUpdate;
   app.stage.addChild(model);
 
+  // 已有旧模型 = “切换模型”：保留人物当前位置、不重置；首次加载则按默认锚点放置
+  const hadPrevModel = !!state.model;
   state.model = model;
 
   // 未声明 Expressions 的 Cubism4 模型：由伴生 vtube.json 发现并挂载可用表情（声明/扫描优先，回退不阻断显示）
@@ -386,7 +388,7 @@ async function doLoad(url, loadOptions) {
   setupIdleScheduler(model);
 
   // 适配尺寸并应用透明度
-  fitToWindow({ preservePosition: false });
+  fitToWindow({ preservePosition: hadPrevModel });
 
   // 记录并按运行时类型判定 Cubism 版本（供日志与设置面板标注；不依赖清单字段猜测）
   state.lastModelKind = detectCubismKind(model);
