@@ -3,6 +3,14 @@
 
 #define AppVer "1.0.4"
 
+; 可用 ISCC /DSRC=... /DARCH=... 覆盖（默认 x64）；x86 用 /DSRC=win-ia32-unpacked /DARCH=x86
+#ifndef SRC
+  #define SRC "win-unpacked"
+#endif
+#ifndef ARCH
+  #define ARCH "x64"
+#endif
+
 [Setup]
 AppId={{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}
 AppName=DesktopPetWeb
@@ -18,15 +26,14 @@ DisableProgramGroupPage=yes
 DisableDirPage=no
 UninstallDisplayIcon={app}\DesktopPetWeb.exe
 OutputDir=..\dist-inno
-OutputBaseFilename=DesktopPetWeb.Setup.{#AppVer}.x64
+OutputBaseFilename=DesktopPetWeb.Setup.{#AppVer}.{#ARCH}
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=icon.ico
 CloseApplications=yes
 RestartApplications=no
 WizardStyle=modern
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+
 
 [Languages]
 Name: "chinese"; MessagesFile: "compiler:Default.isl"
@@ -35,7 +42,7 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："
 
 [Files]
-Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\{#SRC}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\DesktopPetWeb"; Filename: "{app}\DesktopPetWeb.exe"
