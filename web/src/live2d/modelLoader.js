@@ -334,6 +334,12 @@ async function doLoad(url, loadOptions) {
   };
   if (o.idleMotionGroup) modelOptions.idleMotionGroup = o.idleMotionGroup;
 
+  // 切换模型：先记录旧模型的位置（下面的 destroyCurrentModel 会清掉 state.model），加载新模型后回填
+  const prevModel = state.model;
+  const hadPrevModel = !!prevModel;
+  const prevX = prevModel ? prevModel.x : 0;
+  const prevY = prevModel ? prevModel.y : 0;
+
   // 先销毁旧模型，再加载新模型
   destroyCurrentModel();
 
@@ -377,11 +383,7 @@ async function doLoad(url, loadOptions) {
   model.autoUpdate = o.autoUpdate;
   app.stage.addChild(model);
 
-  // 已有旧模型 = “切换模型”：记录其 x/y，加载后回填 → 保留人物当前位置；首次加载按默认锚点放置
-  const prevModel = state.model;
-  const hadPrevModel = !!prevModel;
-  const prevX = prevModel ? prevModel.x : 0;
-  const prevY = prevModel ? prevModel.y : 0;
+
   state.model = model;
 
   // 未声明 Expressions 的 Cubism4 模型：由伴生 vtube.json 发现并挂载可用表情（声明/扫描优先，回退不阻断显示）

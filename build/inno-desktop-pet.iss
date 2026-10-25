@@ -21,6 +21,8 @@ OutputBaseFilename=DesktopPetWeb.Setup.{#AppVer}.x64
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=icon.ico
+CloseApplications=yes
+RestartApplications=no
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -64,4 +66,18 @@ procedure InitializeWizard();
 begin
   WizardForm.DirEdit.Text := 'D:\DesktopPet';
   WizardForm.DirEdit.OnChange := @DirChanged;
+end;
+{ 卸载前：询问是否中断正在运行的桌宠，确保卸载能完全删除（否则文件被占用会残留） }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    if MsgBox('要彻底删除本应用，需先关闭正在运行的 DesktopPetWeb（它会占用文件）。' + #13#10 + '是否现在终止它并继续卸载？', mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      Exec('cmd.exe', '/c taskkill /f /im DesktopPetWeb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Sleep(600);
+    end;
+  end;
 end;
