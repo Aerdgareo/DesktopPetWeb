@@ -259,7 +259,29 @@ function setAlpha(alpha) {
  */
 function setScalePercent(percent) {
   state.options.scalePercent = clamp(Number(percent) || 0, 1, 1000);
-  fitToWindow({ preservePosition: false });
+
+  // 关键：缩放不应把人物拉回屏幕中心（用户反馈）。
+  //   记录缩放前「人物的可见中心」（全局坐标），缩放后平移模型使该中心保持不动 —— 即「围绕人物中心缩放」。
+  const model = state.model;
+  let before = null;
+  if (model) { try { before = getContentBounds(model, true); } catch (_) { before = null; } }
+
+  fitToWindow({ preservePosition: true });
+
+  if (model && before && before.width > 0 && before.height > 0) {
+    let after = null;
+    try { after = getContentBounds(model, true); } catch (_) { after = null; }
+    if (after && after.width > 0 && after.height > 0) {
+      const dx = (before.x + before.width / 2) - (after.x + after.width / 2);
+      const dy = (before.y + before.height / 2) - (after.y + after.height / 2);
+      const screen = state.app && state.app.renderer && state.app.renderer.screen;
+      const W = screen ? Math.max(1, screen.width) : null;
+      const H = screen ? Math.max(1, screen.height) : null;
+      model.x = (W ? clamp(model.x + dx, 0, W) : model.x + dx);
+      model.y = (H ? clamp(model.y + dy, 0, H) : model.y + dy);
+      try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
+    }
+  }
 }
 
 /** 读取当前缩放百分比（供滚轮缩放等增量调节使用） */

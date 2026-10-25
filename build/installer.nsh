@@ -34,9 +34,10 @@
 
 !ifndef BUILD_UNINSTALLER
 Var PetDirDefaulted
-; 允许用户修改安装目录且不追加应用名子目录
+; 允许用户修改安装目录；并在离开目录页时把「DesktopPet」补到所选路径末尾
 !macro customPageAfterChangeDir
   !define MUI_PAGE_CUSTOMFUNCTION_PRE PetDirPagePre
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE PetDirPageLeave
   !insertmacro MUI_PAGE_DIRECTORY
 !macroend
 Function PetDirPagePre
@@ -48,6 +49,14 @@ Function PetDirPagePre
     ${Else}
       StrCpy $INSTDIR "C:\DesktopPet"
     ${EndIf}
+  ${EndIf}
+FunctionEnd
+; 离开目录页：若用户所选路径的最后一级目录不是 DesktopPet，则追加 \DesktopPet 子目录
+;   （例：用户选 D:\Games → 实际安装到 D:\Games\DesktopPet；选 D:\DesktopPet → 保持不变）
+Function PetDirPageLeave
+  ${GetFileName} $0 "$INSTDIR"
+  ${If} $0 != "DesktopPet"
+    StrCpy $INSTDIR "$INSTDIR\DesktopPet"
   ${EndIf}
 FunctionEnd
 !endif
