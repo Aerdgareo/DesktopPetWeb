@@ -79,22 +79,31 @@ jobs:
           # 传达“两个附件”形态与源码/GPLv3 合规信息。
           # 注：本 action 的 append_body 是布尔开关（非文本），此处按官方语义使用 body。
           body: |
-            ---
-            ### 发行附件（同一 Release 承载两个附件）
-            1. **主程序安装包**（本工作流 CI 自动构建并上传）：
-               - Windows：`DesktopPetWeb Setup <version>.exe`（NSIS）
-               - macOS：`DesktopPetWeb-<version>.dmg`（x64，Intel）/ `DesktopPetWeb-<version>-arm64.dmg`（Apple Silicon）
-               - Linux：`DesktopPetWeb-<version>.AppImage`、`desktop-pet-web_<version>_amd64.deb`
-            2. **模型安装包** `DesktopPetModels-Setup.exe`（含 24 个 Live2D 模型，约 189 MB）：
-               - 该包体积大且需纳入第三方/个人模型，**不纳入 git 仓库、也不在 CI 中构建**，需**人工手动上传到本 Release**；
-               - 上传后会出现在本页 “Assets” 列表中（详见仓库 `.github/RELEASE.md`）。
-               - Web 界面上传：在本 Release 编辑页 “Attach binaries by dropping them here or selecting them” 选择 `DesktopPetModels-Setup.exe`。
-               - 命令行上传：`gh release upload <tag> DesktopPetModels-Setup.exe`
+            # DesktopPetWeb <version> · 跨平台桌面宠物
 
-            ### 源码与许可（GPL-3.0-or-later）
-            本项目自身源码以 **GPL-3.0-or-later** 授权。按 GPLv3（第 6 条），分发二进制须同时提供**对应源码**：
-            源码见本仓库对应 tag 快照，亦可直接下载本 Release 的 “Source code (zip/tar.gz)”。
-            第三方组件 / Live2D 内核 / 示例模型 / 用户导入模型的授权边界见 `THIRD-PARTY-NOTICES.md`。
+            一个基于 **Electron + Live2D** 的桌面宠物：**透明 / 无边框 / 置顶**，鼠标**分区穿透**（只在人物与设置面板上可点），支持**视线跟随鼠标、拖拽、点击反应、待机动作**；模型放在外部 `models/` 文件夹，**丢文件夹即用**。
+
+            ## 🐾 快速上手（Windows）
+            1. 下载本页 Assets 中的 Windows 安装包 `.exe`
+            2. 双击安装（默认装到 `D:\DesktopPet`），从开始菜单 / 安装目录启动
+            3. 启动即出现宠物「肥牛」，可拖拽、点击互动、滚轮缩放、右键设置
+            > 安装包为 **64 位（x64）**：适用于 64 位 Windows 10/11；**32 位系统不支持**。
+
+            ## 📦 我该下哪个？
+            - **Windows（x64）**：`DesktopPetWeb Setup <version>.exe`（NSIS）
+            - **Linux**：`DesktopPetWeb-<version>.AppImage`（免安装，`chmod +x` 后运行）/ `desktop-pet-web_<version>_amd64.deb`
+            - **macOS（Apple 芯片）**：`DesktopPetWeb-<version>-arm64.dmg`
+            - **macOS（Intel）**：`DesktopPetWeb-<version>-x64.dmg`（或未带架构后缀的 `.dmg`）
+
+            ## 🎭 更多模型（模型安装包）
+            主程序**只内置一个「肥牛」模型**。想换/加模型，请下载同一 Release 里的 **`DesktopPetModels-Setup.exe`**（约 190 MB，**内含 24 个 Live2D 模型**）：
+            - **Windows**：双击该 exe 安装——它会自动定位主程序安装目录并把模型导入到 `models/`。
+            - **Linux / macOS（无安装器）**：用**压缩软件（7-Zip / Keka / 归档实用工具）直接打开该 exe**，把里面的模型文件夹**提取**出来；再到桌宠「设置 → 外部模型文件夹」选择该目录即可加载。
+            > 该模型包体积大且含第三方模型，**不进 git 仓库、也不在 CI 构建**，需**人工上传到本 Release**（详见 `.github/RELEASE.md`）。
+
+            ## 📄 源码与许可
+            - **源码**：本 Release 对应 tag，或直接下载本页 `Source code (zip/tar.gz)`。
+            - **许可**：源码以 **GPL-3.0-or-later** 授权；第三方组件 / Live2D 内核 / 模型授权边界见 `THIRD-PARTY-NOTICES.md`。
 
       # ── 模型安装包（DesktopPetModels-Setup.exe）——由人工手动附加，**不在 CI 构建/上传** ──
       #   原因：约 189MB，含第三方/个人 Live2D 模型（版权受限），既不进仓库，也无 CI 内可用的模型源。
