@@ -4,6 +4,33 @@
 
 ---
 
+## v1.0.1
+
+- **Release 页**：https://github.com/Aerdgareo/DesktopPetWeb/releases/tag/v1.0.1
+- **源码**
+  - Git tag：`v1.0.1`
+  - 对应提交：`bb7fb7d`
+  - 许可：**GPL-3.0-or-later**
+- **发行产物（7 个附件）**
+
+  | 平台 | 文件 | 大小（字节） | 说明 |
+  |---|---|---:|---|
+  | Windows · x64 | `DesktopPetWeb.Setup.1.0.1.x64.exe` | 83,203,653 | NSIS 安装器（lite，外部 `models/` 仅「肥牛」） |
+  | Windows · x86（32 位） | `DesktopPetWeb.Setup.1.0.1.x86.exe` | 78,104,110 | NSIS 安装器（lite，32 位系统） |
+  | Linux | `DesktopPetWeb-1.0.1.AppImage` | 112,053,761 | AppImage（lite） |
+  | Linux | `desktop-pet-web_1.0.1_amd64.deb` | 79,267,846 | deb（lite） |
+  | macOS · Apple Silicon | `DesktopPetWeb-1.0.1-arm64.dmg` | 101,258,716 | arm64 dmg（lite） |
+  | macOS · Intel | `DesktopPetWeb-1.0.1.dmg` | 107,309,643 | x64 dmg（lite） |
+  | 模型包 | `DesktopPetModels-Setup.exe` | 189,483,408 | 含 24 个 Live2D 模型，**手动上传**到同一 Release |
+
+- **本版修复**
+  1. **缩放不再把人物拉回屏幕中心**（改为围绕人物可见中心缩放）；
+  2. **安装时选其它路径会自动补 `DesktopPet` 子目录**；
+  3. **CI 修复**：Windows 构建从失败恢复 → 现三平台全自动；Windows **拆分为 x64/x86 两个独立安装包**。
+- **构建方式**：**全部由 GitHub Actions CI 自动构建**（tag `v1.0.1` 触发）；Windows 两个 job（x64 / x86）、macOS 一次出 arm64+x64、Linux AppImage+deb。模型包由人工补传。
+
+---
+
 ## v1.0.0
 
 - **Release 页**：https://github.com/Aerdgareo/DesktopPetWeb/releases/tag/v1.0.0
