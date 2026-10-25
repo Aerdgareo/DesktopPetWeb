@@ -67,17 +67,40 @@ begin
   WizardForm.DirEdit.Text := 'D:\DesktopPet';
   WizardForm.DirEdit.OnChange := @DirChanged;
 end;
-{ 卸载前：询问是否中断正在运行的桌宠，确保卸载能完全删除（否则文件被占用会残留） }
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+{ 结束正在运行的桌宠（静默卸载时直接杀；交互式卸载时先确认） }
+procedure KillDesktopPet();
 var
   ResultCode: Integer;
 begin
+  Exec('cmd.exe', '/c taskkill /f /im DesktopPetWeb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(600);
+end;
+
+{ 卸载前：确保能完全删除（否则文件被占用会残留） }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
   if CurUninstallStep = usUninstall then
   begin
-    if MsgBox('要彻底删除本应用，需先关闭正在运行的 DesktopPetWeb（它会占用文件）。' + #13#10 + '是否现在终止它并继续卸载？', mbConfirmation, MB_YESNO) = IDYES then
+    if UninstallSilent then
+      KillDesktopPet()
+    else if MsgBox('要彻底删除本应用，需先关闭正在运行的 DesktopPetWeb（它会占用文件）。' + #13#10 + '是否现在终止它并继续卸载？', mbConfirmation, MB_YESNO) = IDYES then
+      KillDesktopPet();
+  end;
+end;
+
+{ 安装前：若检测到本程序已安装，询问用户是否先卸载旧版本，卸载后再安装 }
+function InitializeSetup(): Boolean;
+var
+  Uninst: String;
+  ResultCode: Integer;
+begin
+  Result := True;
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}_is1', 'UninstallString', Uninst) then
+  begin
+    if MsgBox('检测到已安装 DesktopPetWeb。' + #13#10 + '是否先卸载已安装的版本，然后再安装本版本？', mbConfirmation, MB_YESNO) = IDYES then
     begin
-      Exec('cmd.exe', '/c taskkill /f /im DesktopPetWeb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      Sleep(600);
+      Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      Sleep(1000);
     end;
   end;
 end;

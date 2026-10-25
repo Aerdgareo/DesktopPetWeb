@@ -571,6 +571,16 @@ function createSettingsPanel(deps) {
     extAddBtn.title = '当前外壳不支持外部模型文件夹';
   }
 
+  // 重置模型位置（放在不常用位置：面板靠底部）
+  const resetSection = el('div', 'pet-section');
+  const resetBtn = el('button', 'pet-btn', '重置模型位置');
+  resetBtn.type = 'button';
+  resetBtn.title = '将人物恢复到默认位置（底部居中）';
+  resetBtn.addEventListener('click', () => {
+    if (modelLoader && typeof modelLoader.resetModelPosition === 'function') modelLoader.resetModelPosition();
+  });
+  resetSection.appendChild(resetBtn);
+
   // 状态行
   const status = el('div', 'pet-status', '就绪');
 
@@ -583,6 +593,7 @@ function createSettingsPanel(deps) {
   panel.appendChild(switchSection);
   panel.appendChild(actions);
   panel.appendChild(extSection);
+  panel.appendChild(resetSection);
   panel.appendChild(status);
   document.body.appendChild(panel);
 

@@ -303,6 +303,12 @@ function getScalePercent() {
   return Number(state.options.scalePercent) || 0;
 }
 
+/** 重置人物位置：恢复到默认锚点（底部居中），不改变缩放 */
+function resetModelPosition() {
+  if (!state.model) return;
+  fitToWindow({ preservePosition: false });
+}
+
 /**
  * 加载模型（自动识别 Cubism 2 / Cubism 4）。
  * @param {string} url 模型清单地址（.model.json 或 .model3.json，也可为对象 URL）
@@ -1669,6 +1675,7 @@ export {
   setAlpha,
   setScalePercent,
   getScalePercent,
+  resetModelPosition,
   unloadModel,
   getExpressionNames,
   selectExpression,
@@ -1698,6 +1705,7 @@ export default {
   setAlpha,
   setScalePercent,
   getScalePercent,
+  resetModelPosition,
   unloadModel,
   getExpressionNames,
   selectExpression,
