@@ -14,6 +14,8 @@
 ; ============================================================================
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "WinMessages.nsh"
+!include "nsDialogs.nsh"
 
 
 ; ---------------------------------------------------------------------------
@@ -35,35 +37,116 @@
 
 !ifndef BUILD_UNINSTALLER
 Var PetDirDefaulted
+Var PetDirField
+Var PetSpaceLabel
 
-; 目录页：使用**标准 MUI「目标文件夹」页**（保留 标题 / 浏览按钮 / 所需与可用空间 等全部标准元素），
-;   并在页面顶部说明“会自动补 DesktopPet 子目录”；安装前(INSTFILES 页 PRE)再兜底补一次（幂等）。
+; 目录页（方案 B）：自定义页，尽量贴近标准观感；选中/输入已存在目录后**在地址栏就地补** \DesktopPet（可见）。
+;   安装前再用 PetInstFilesPre 兜底（幂等）。
 !macro customPageAfterChangeDir
-  !define MUI_INNERTEXT_DIRECTORY_TOP "请选择安装位置。若所选目录不以 DesktopPet 结尾，安装时会自动在其下创建 DesktopPet 子目录。"
-  !define MUI_PAGE_CUSTOMFUNCTION_PRE PetDirPagePre
-  !insertmacro MUI_PAGE_DIRECTORY
-  ; 紧随本宏之后，模板插入 MUI_PAGE_INSTFILES —— 定义其 PRE；届时 $INSTDIR 已是最终值
+  Page custom PetDirPageCreate PetDirPageLeave
   !define MUI_PAGE_CUSTOMFUNCTION_PRE PetInstFilesPre
 !macroend
 
-; 首次进入目录页时设定默认目录：升级→沿用注册表上次安装目录；全新→D:\DesktopPet（无 D 盘回退 C:）
-; 仅首次生效（返回再进不覆盖用户输入）
-Function PetDirPagePre
-  ${If} $PetDirDefaulted == "1"
+Function PetDirPageCreate
+  ; 默认目录：升级→沿用注册表上次安装目录；全新→D:\DesktopPet（无 D 盘回退 C:）
+  ${If} $PetDirDefaulted != "1"
+    StrCpy $PetDirDefaulted "1"
+    ReadRegStr $0 HKCU "Software\DesktopPet" "InstallDir"
+    ${If} $0 == ""
+      ReadRegStr $0 HKLM "Software\DesktopPet" "InstallDir"
+    ${EndIf}
+    ${If} $0 != ""
+      StrCpy $INSTDIR "$0"
+    ${Else}
+      ${If} ${FileExists} "D:\*.*"
+        StrCpy $INSTDIR "D:\DesktopPet"
+      ${Else}
+        StrCpy $INSTDIR "C:\DesktopPet"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  ; 页面头部标题（覆盖上一页残留）；MUI2 头部控件 id 为 1034(标题)/1035(副标题)
+  GetDlgItem $0 $HWNDPARENT 1034
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:选择安装位置"
+  GetDlgItem $0 $HWNDPARENT 1035
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:安装到所选目录下的 DesktopPet 子目录"
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 12u "安装目录（若末级不是 DesktopPet，会自动补上）："
+  Pop $1
+
+  ${NSD_CreateDirRequest} 0 12u 100% 12u "$INSTDIR"
+  Pop $PetDirField
+  ${NSD_OnChange} $PetDirField PetDirOnChange
+
+  ${NSD_CreateButton} 0 28u 62u 12u "浏览..."
+  Pop $2
+  ${NSD_OnClick} $2 PetDirBrowse
+
+  ${NSD_CreateLabel} 0 44u 100% 10u ""
+  Pop $PetSpaceLabel
+  Call PetDirUpdateSpace
+
+  nsDialogs::Show
+FunctionEnd
+
+; 显示所选分区剩余空间（可选提示）
+Function PetDirUpdateSpace
+  ${GetRoot} "$INSTDIR" $0
+  ${DriveSpace} "$0" "/D=F /S=M" $1
+  ${If} $1 != ""
+    ${NSD_SetText} $PetSpaceLabel "所选分区剩余空间：$1 MB"
+  ${EndIf}
+FunctionEnd
+
+; 独立“浏览...”按钮：选目录后在地址栏就地补 \DesktopPet
+Function PetDirBrowse
+  nsDialogs::SelectFolderDialog "选择安装目录" "$INSTDIR"
+  Pop $0
+  ${If} $0 != error
+    StrCpy $INSTDIR "$0"
+    ${GetFileName} $1 "$INSTDIR"
+    ${If} $1 != "DesktopPet"
+      ${If} ${FileExists} "$INSTDIR\*.*"
+        StrCpy $INSTDIR "$INSTDIR\DesktopPet"
+      ${EndIf}
+    ${EndIf}
+    ${NSD_SetText} $PetDirField "$INSTDIR"
+    Call PetDirUpdateSpace
+  ${EndIf}
+FunctionEnd
+
+; 地址栏变更时：若值已是「存在的目录」且末级名不是 DesktopPet，则就地补 \DesktopPet 并写回地址栏
+Function PetDirOnChange
+  ${NSD_GetText} $PetDirField $0
+  ${If} $0 == ""
     Return
   ${EndIf}
-  StrCpy $PetDirDefaulted "1"
-  ReadRegStr $0 HKCU "Software\DesktopPet" "InstallDir"
-  ${If} $0 == ""
-    ReadRegStr $0 HKLM "Software\DesktopPet" "InstallDir"
+  ${GetFileName} $1 "$0"
+  ${If} $1 != "DesktopPet"
+    ${If} ${FileExists} "$0\*.*"
+      StrCpy $0 "$0\DesktopPet"
+      ${NSD_SetText} $PetDirField "$0"
+      StrCpy $INSTDIR "$0"
+      Call PetDirUpdateSpace
+    ${EndIf}
   ${EndIf}
+FunctionEnd
+
+Function PetDirPageLeave
+  ${NSD_GetText} $PetDirField $0
   ${If} $0 != ""
-    StrCpy $INSTDIR "$0"
-  ${Else}
-    ${If} ${FileExists} "D:\*.*"
-      StrCpy $INSTDIR "D:\DesktopPet"
+    ${GetFileName} $1 "$0"
+    ${If} $1 == "DesktopPet"
+      StrCpy $INSTDIR "$0"
     ${Else}
-      StrCpy $INSTDIR "C:\DesktopPet"
+      StrCpy $INSTDIR "$0\DesktopPet"
     ${EndIf}
   ${EndIf}
 FunctionEnd
