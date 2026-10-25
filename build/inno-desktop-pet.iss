@@ -126,28 +126,59 @@ begin
   RegQueryStringValue(HKLM, S, 'QuietUninstallString', Result);
 end;
 
-{ 安装前：若检测到本程序已安装，先询问是否卸载旧版本；卸载后再询问是否沿用上次安装目录 }
+{ 安装前：检测旧版本（Inno 或 NSIS 装的都算）；询问是否先卸载，卸载后再问是否沿用上次目录 }
 function InitializeSetup(): Boolean;
 var
   Uninst: String;
   ResultCode: Integer;
   S: String;
+  D: String;
+  IsNsis: Boolean;
 begin
   Result := True;
   UsePrevDir := False;
   PrevAppDir := '';
+  IsNsis := False;
+
+  { ① Inno 装的旧版：查 Inno 卸载项的 InstallLocation }
   S := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}_is1';
   RegQueryStringValue(HKCU, S, 'InstallLocation', PrevAppDir);
   if PrevAppDir = '' then
     RegQueryStringValue(HKLM, S, 'InstallLocation', PrevAppDir);
-
   Uninst := FindPrevUninstall();
+
+  { ② NSIS(electron-builder) 装的旧版(v1.0.0/1.0.1/1.0.2)：查 Software\DesktopPet\InstallDir + 其卸载器 }
+  if Uninst = '' then
+  begin
+    D := '';
+    if not RegQueryStringValue(HKCU, 'Software\DesktopPet', 'InstallDir', D) then
+      RegQueryStringValue(HKLM, 'Software\DesktopPet', 'InstallDir', D);
+    if D <> '' then
+    begin
+      if FileExists(AddBackslash(D) + 'Uninstall DesktopPetWeb.exe') then
+      begin
+        Uninst := AddBackslash(D) + 'Uninstall DesktopPetWeb.exe';
+        PrevAppDir := D;
+        IsNsis := True;
+      end
+      else if FileExists(AddBackslash(D) + 'Uninstall DesktopPetLite.exe') then
+      begin
+        Uninst := AddBackslash(D) + 'Uninstall DesktopPetLite.exe';
+        PrevAppDir := D;
+        IsNsis := True;
+      end;
+    end;
+  end;
+
   if Uninst <> '' then
   begin
-    if MsgBox('检测到已安装 DesktopPetWeb。' + #13#10 + '是否先卸载已安装的版本，然后再安装本版本？', mbConfirmation, MB_YESNO) = IDYES then
+    if MsgBox('检测到已安装 DesktopPetWeb（旧版）。' + #13#10 + '是否先卸载已安装的版本，然后再安装本版本？', mbConfirmation, MB_YESNO) = IDYES then
     begin
-      Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-      Sleep(1500);
+      if IsNsis then
+        Exec(Uninst, '/S', '', SW_SHOW, ewWaitUntilTerminated, ResultCode)
+      else
+        Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      Sleep(2000);
       { 卸载完成后：提示是否沿用上次的安装目录 }
       if PrevAppDir <> '' then
       begin
