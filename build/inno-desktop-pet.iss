@@ -63,6 +63,10 @@ Type: filesandordirs; Name: "{app}\locales"
 Type: filesandordirs; Name: "{app}\swiftshader"
 Type: filesandordirs; Name: "{app}"
 
+[Registry]
+; 供「模型安装包」自动定位主程序安装目录（与 NSIS 版同一键；卸载时删除该值）
+Root: HKCU; Subkey: "Software\DesktopPet"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue
+
 [Code]
 var
   InDirChange: Boolean;
