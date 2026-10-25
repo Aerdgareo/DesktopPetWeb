@@ -4,6 +4,8 @@
 支持 **Live2D Cubism 2 代（`.moc`）与 4 代（`.moc3`）** 模型，可视线跟随、拖拽、点击反应、待机动作，
 模型可放在**外部文件夹**随时增删。
 
+跨平台支持 **Windows / Linux / macOS**；就绪包（各平台**安装包** + **模型安装包**）见顶部 [Releases](https://github.com/Aerdgareo/DesktopPetWeb/releases)，**下载即用**。
+
 > 为什么用 Web 而不是 Unity：Unity 的 Cubism SDK 5 **不支持 Cubism 2 代模型**；
 > 而 `pixi-live2d-display` **一套代码同时支持 2 代与 4 代**。
 
@@ -19,9 +21,11 @@
 
 | 平台 | 安装包 | 使用方式 |
 |---|---|---|
-| Windows | `DesktopPetWeb Setup x.y.z.exe`（NSIS） | 双击安装，默认装到 `D:\DesktopPet`，从开始菜单 / 安装目录启动 |
+| Windows（x64） | `DesktopPetLite.Setup.x.y.z.x64.exe`（NSIS） | 64 位 Windows 10/11（主流）；双击安装，默认装到 `D:\DesktopPet` |
+| Windows（x86） | `DesktopPetLite.Setup.x.y.z.x86.exe`（NSIS） | 32 位 Windows（老设备） |
 | Linux | `DesktopPetWeb-x.y.z.AppImage` / `desktop-pet-web_x.y.z_amd64.deb` | AppImage：`chmod +x` 后直接运行；deb：`sudo dpkg -i xxx.deb` |
-| macOS | `DesktopPetWeb-x.y.z.dmg` | 打开 dmg，将 App 拖入「应用程序」（由 CI 构建） |
+| macOS（Apple 芯片） | `DesktopPetWeb-x.y.z-arm64.dmg` | 打开 dmg，将 App 拖入「应用程序」 |
+| macOS（Intel） | `DesktopPetWeb-x.y.z.dmg` | 同上 |
 
 > 同一个 Release 还附带**模型安装包 `DesktopPetModels-Setup.exe`**（内含一批 Live2D 模型）。
 
@@ -34,6 +38,13 @@
 
 启动应用后，打开**设置面板 →「外部模型文件夹」**，选择存放模型的目录（可添加多个，增删即时生效）即可显示模型。
 模型入口为 `.model3.json`（Cubism 4）或 `.model.json`（Cubism 2）；未声明动作/表情时会自动扫描目录补齐。
+
+### 常见问题（FAQ）
+- **怎么换 / 加模型？** 主程序只内置「肥牛」一个模型；打开桌宠「设置」面板 →「外部模型文件夹」选择模型目录（可添加多个）即可，增删即时生效。
+- **支持哪些模型？** Live2D **Cubism 2 代（`.moc`）与 4 代（`.moc3`）**，自动识别。
+- **装哪个版本？** Windows 有 **x64（主流）** 与 **x86（32 位系统）**；Linux 用 AppImage/deb；macOS 按芯片选 `arm64` / `x64` dmg。
+- **卸载后会残留吗？** 主程序卸载会一并清理其安装目录下的 `models`。
+- **模型版权？** 随仓库/模型安装包附带的模型**版权归各自原作者**，详见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
 
 ---
 

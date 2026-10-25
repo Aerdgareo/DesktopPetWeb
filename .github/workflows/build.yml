@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: --win nsis
+            target: --win nsis --x64 --ia32
           - os: macos-latest
             target: --mac dmg --arm64 --x64
           - os: ubuntu-latest
@@ -90,7 +90,8 @@ jobs:
             > 安装包为 **64 位（x64）**：适用于 64 位 Windows 10/11；**32 位系统不支持**。
 
             ## 📦 我该下哪个？
-            - **Windows（x64）**：`DesktopPetWeb Setup <version>.exe`（NSIS）
+            - **Windows（x64）**：`DesktopPetWeb Setup <version>.exe`（NSIS，64 位）
+            - **Windows（x86）**：`DesktopPetWeb Setup <version>.exe`（NSIS，32 位）
             - **Linux**：`DesktopPetWeb-<version>.AppImage`（免安装，`chmod +x` 后运行）/ `desktop-pet-web_<version>_amd64.deb`
             - **macOS（Apple 芯片）**：`DesktopPetWeb-<version>-arm64.dmg`
             - **macOS（Intel）**：`DesktopPetWeb-<version>-x64.dmg`（或未带架构后缀的 `.dmg`）

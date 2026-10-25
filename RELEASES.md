@@ -12,11 +12,12 @@
   - 对应提交：`27889cf`（含 lite 打包配置与 macOS `arm64+x64` 交叉构建）
   - GitHub 自动附带源码归档：`Source code (zip)` / `Source code (tar.gz)`
   - 许可：**GPL-3.0-or-later**（按 GPLv3，分发二进制须同时提供对应源码）
-- **发行产物（6 个附件）**
+- **发行产物（7 个附件）**
 
   | 平台 | 文件 | 大小（字节） | 说明 |
   |---|---|---:|---|
-  | Windows | `DesktopPetLite.Setup.1.0.0.exe` | 83,196,672 | NSIS 安装器（lite，外部 `models/` 仅「肥牛」） |
+  | Windows · x64 | `DesktopPetLite.Setup.1.0.0.x64.exe` | 83,196,672 | NSIS 安装器（lite，外部 `models/` 仅「肥牛」） |
+  | Windows · x86（32 位） | `DesktopPetLite.Setup.1.0.0.x86.exe` | 78,097,431 | NSIS 安装器（lite，32 位系统） |
   | Linux | `DesktopPetWeb-1.0.0.AppImage` | 112,053,654 | AppImage（lite） |
   | Linux | `desktop-pet-web_1.0.0_amd64.deb` | 79,117,086 | deb（lite） |
   | macOS · Apple Silicon | `DesktopPetWeb-1.0.0-arm64.dmg` | 101,230,411 | arm64 dmg（lite） |
