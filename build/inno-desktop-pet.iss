@@ -59,6 +59,8 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 var
   InDirChange: Boolean;
+  PrevAppDir: String;   // 旧版本安装目录（若检测到）
+  UsePrevDir: Boolean;  // 用户是否选择沿用上次目录
 
 { 地址栏变更：若所选/输入的目录是“已存在目录”且末级名不是 DesktopPet，则就地补 \DesktopPet（可见） }
 procedure DirChanged(Sender: TObject);
@@ -77,7 +79,10 @@ end;
 
 procedure InitializeWizard();
 begin
-  WizardForm.DirEdit.Text := 'D:\DesktopPet';
+  if UsePrevDir and (PrevAppDir <> '') then
+    WizardForm.DirEdit.Text := PrevAppDir
+  else
+    WizardForm.DirEdit.Text := 'D:\DesktopPet';
   WizardForm.DirEdit.OnChange := @DirChanged;
 end;
 { 结束正在运行的桌宠（静默卸载时直接杀；交互式卸载时先确认） }
@@ -114,13 +119,21 @@ begin
   RegQueryStringValue(HKLM, S, 'QuietUninstallString', Result);
 end;
 
-{ 安装前：若检测到本程序已安装，询问用户是否先卸载旧版本，卸载后再安装 }
+{ 安装前：若检测到本程序已安装，先询问是否卸载旧版本；卸载后再询问是否沿用上次安装目录 }
 function InitializeSetup(): Boolean;
 var
   Uninst: String;
   ResultCode: Integer;
+  S: String;
 begin
   Result := True;
+  UsePrevDir := False;
+  PrevAppDir := '';
+  S := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}_is1';
+  RegQueryStringValue(HKCU, S, 'InstallLocation', PrevAppDir);
+  if PrevAppDir = '' then
+    RegQueryStringValue(HKLM, S, 'InstallLocation', PrevAppDir);
+
   Uninst := FindPrevUninstall();
   if Uninst <> '' then
   begin
@@ -128,6 +141,12 @@ begin
     begin
       Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
       Sleep(1500);
+      { 卸载完成后：提示是否沿用上次的安装目录 }
+      if PrevAppDir <> '' then
+      begin
+        if MsgBox('是否使用上次的安装目录？' + #13#10 + PrevAppDir, mbConfirmation, MB_YESNO) = IDYES then
+          UsePrevDir := True;
+      end;
     end;
   end;
 end;
