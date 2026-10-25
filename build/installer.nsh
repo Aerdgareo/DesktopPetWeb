@@ -2,7 +2,7 @@
 ; DesktopPetLite 自定义 NSIS 安装/卸载逻辑（electron-builder 的 nsis.include）
 ;
 ; 注意：本文件在模板 include 之前被插入，若用到 ${If}/${FileExists} 等，
-;       需在此处自行 include LogicLib / FileFunc。
+;       需在此处自行 include LogicLib / FileFunc / StrContains。
 ;
 ; 模板调用时机（app-builder-lib/templates/nsis/）：
 ;   customInit                -> installer.nsi .onInit（initMultiUser 之后）
@@ -14,7 +14,7 @@
 ; ============================================================================
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
-!include "nsDialogs.nsh"
+
 
 ; ---------------------------------------------------------------------------
 ; 默认安装目录：默认 D:\DesktopPet（D 盘不存在回退 C:\DesktopPet）
@@ -34,18 +34,25 @@
 !macroend
 
 !ifndef BUILD_UNINSTALLER
-Var PetDirField
+Var PetDirDefaulted
 
-; 允许用户修改安装目录；并在“选择目录”页上：一旦所选/输入的目录是**已存在目录**且末级名不是 DesktopPet，
-; 就地在【地址栏】补上 \DesktopPet 子目录（可见）。安装前再用 PetInstFilesPre 兜底（幂等）。
+; 目录页：使用**标准 MUI「目标文件夹」页**（保留 标题 / 浏览按钮 / 所需与可用空间 等全部标准元素），
+;   并在页面顶部说明“会自动补 DesktopPet 子目录”；安装前(INSTFILES 页 PRE)再兜底补一次（幂等）。
 !macro customPageAfterChangeDir
-  Page custom PetDirPageCreate PetDirPageLeave
-  ; 兜底：紧随本宏之后模板插入 MUI_PAGE_INSTFILES —— 定义其 PRE；届时 $INSTDIR 已是最终值
+  !define MUI_INNERTEXT_DIRECTORY_TOP "请选择安装位置。若所选目录不以 DesktopPet 结尾，安装时会自动在其下创建 DesktopPet 子目录。"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE PetDirPagePre
+  !insertmacro MUI_PAGE_DIRECTORY
+  ; 紧随本宏之后，模板插入 MUI_PAGE_INSTFILES —— 定义其 PRE；届时 $INSTDIR 已是最终值
   !define MUI_PAGE_CUSTOMFUNCTION_PRE PetInstFilesPre
 !macroend
 
-Function PetDirPageCreate
-  ; 全新安装：默认 D:\DesktopPet（无 D 盘回退 C:\DesktopPet）；升级：沿用注册表上次安装目录
+; 首次进入目录页时设定默认目录：升级→沿用注册表上次安装目录；全新→D:\DesktopPet（无 D 盘回退 C:）
+; 仅首次生效（返回再进不覆盖用户输入）
+Function PetDirPagePre
+  ${If} $PetDirDefaulted == "1"
+    Return
+  ${EndIf}
+  StrCpy $PetDirDefaulted "1"
   ReadRegStr $0 HKCU "Software\DesktopPet" "InstallDir"
   ${If} $0 == ""
     ReadRegStr $0 HKLM "Software\DesktopPet" "InstallDir"
@@ -59,49 +66,10 @@ Function PetDirPageCreate
       StrCpy $INSTDIR "C:\DesktopPet"
     ${EndIf}
   ${EndIf}
-
-
-  nsDialogs::Create 1018
-  Pop $0
-  ${If} $0 == error
-    Abort
-  ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 22u "请选择安装目录；选中其它目录后，地址栏会自动补上 DesktopPet 子目录。"
-  Pop $1
-  ${NSD_CreateDirRequest} 0 24u 100% 12u "$INSTDIR"
-  Pop $PetDirField
-  ${NSD_OnChange} $PetDirField PetDirOnChange
-  nsDialogs::Show
-FunctionEnd
-
-; 地址栏变更时：若值已是「存在的目录」且末级名不是 DesktopPet，则就地补 \DesktopPet 并写回地址栏
-Function PetDirOnChange
-  ${NSD_GetText} $PetDirField $0
-  ${If} $0 == ""
-    Return
-  ${EndIf}
-  ${GetFileName} $1 "$0"
-  ${If} $1 != "DesktopPet"
-    ${If} ${FileExists} "$0\*.*"
-      StrCpy $0 "$0\DesktopPet"
-      ${NSD_SetText} $PetDirField "$0"
-    ${EndIf}
-  ${EndIf}
-FunctionEnd
-
-Function PetDirPageLeave
-  ${NSD_GetText} $PetDirField $0
-  ${If} $0 != ""
-    ${GetFileName} $1 "$0"
-    ${If} $1 == "DesktopPet"
-      StrCpy $INSTDIR "$0"
-    ${Else}
-      StrCpy $INSTDIR "$0\DesktopPet"
-    ${EndIf}
-  ${EndIf}
 FunctionEnd
 
 ; 安装前兜底：若所选路径末级名不是 DesktopPet，则补 \DesktopPet（幂等）
+;   （例：R:\ → R:\DesktopPet；D:\Games → D:\Games\DesktopPet；D:\DesktopPet → 保持不变）
 Function PetInstFilesPre
   ${GetFileName} $0 "$INSTDIR"
   ${If} $0 != "DesktopPet"
@@ -122,15 +90,26 @@ FunctionEnd
 ; ---------------------------------------------------------------------------
 ; 【关键修复】覆盖默认的“应用正在运行”检查（安装器 + 卸载器都生效）
 ;
-; 模板默认实现（include/allowOnlyOneInstallerInstance.nsh）在应用仍在运行时，
-; 若无法自动关闭会 MessageBox“无法关闭…重试/取消”并阻塞（安装/卸载都会卡住）。
-; 这里改为：直接 taskkill /f 强杀正在运行的程序，不弹窗、不阻塞。
+; 模板默认实现（allowOnlyOneInstallerInstance.nsh / extractAppPackage.nsh / installUtil.nsh）
+; 在应用仍在运行（或文件被占用）时会 MessageBox“无法关闭…重试/取消”并阻塞。
+; 这里改为：**循环强杀并确认进程已退出**，不弹窗、不阻塞；避免解包阶段因文件仍被占用再次弹框。
 ; ---------------------------------------------------------------------------
 !macro customCheckAppRunning
   DetailPrint "结束正在运行的 ${APP_EXECUTABLE_FILENAME}（若有）…"
+  ; 多次强杀 + 等待，确保进程退出、文件锁释放（避免解包阶段再弹“无法关闭”）。
+  ; 说明：不用循环标签/StrContains（其在卸载器段会因 Call 前缀问题编译失败），改为展开式。
   nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${APP_EXECUTABLE_FILENAME}"`
   Pop $0
-  Sleep 600
+  Sleep 400
+  nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${APP_EXECUTABLE_FILENAME}"`
+  Pop $0
+  Sleep 400
+  nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${APP_EXECUTABLE_FILENAME}"`
+  Pop $0
+  Sleep 400
+  nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${APP_EXECUTABLE_FILENAME}"`
+  Pop $0
+  Sleep 900
 !macroend
 
 ; ---------------------------------------------------------------------------
