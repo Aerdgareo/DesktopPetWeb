@@ -119,4 +119,5 @@ npx electron-builder --mac dmg      # 需在 macOS 上执行
 
 ## 致谢
 - [Live2D Cubism](https://www.live2d.com/) · [pixi-live2d-display](https://github.com/guansss/pixi-live2d-display) · [PixiJS](https://pixijs.com/) · [Electron](https://www.electronjs.org/)
-- [Cutiei/-live2d](https://github.com/Cutiei/-live2d) —— 感谢其提供的 Live2D 相关资源 / 模型支持
+- [Cutiei/-live2d](https://github.com/Cutiei/-live2d) —— 感谢其提供的 Live2D 相关资源 / 模型支持- [morettt/my-neuro](https://github.com/morettt/my-neuro) —— 感谢其提供的相关资源 / 模型支持
+- **玄宝酱**（B 站）：[space.bilibili.com/131661224](https://space.bilibili.com/131661224) —— 感谢其提供的角色模型

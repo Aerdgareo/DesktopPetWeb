@@ -40,7 +40,12 @@ const isPackaged = app.isPackaged;
 let MODELS_DIR;
 try {
   MODELS_DIR = isPackaged
-    ? path.join(path.dirname(app.getPath('exe')), 'models') // 安装目录根部 models/
+    // macOS：electron-builder 的 extraFiles 落在 `<App>.app/Contents/` 下，
+    //   而可执行文件位于 `<App>.app/Contents/MacOS/` → 模型目录取上一级 `Contents/models`。
+    // Windows / Linux：extraFiles 落在安装根（与 exe 同级）→ `dirname(exe)/models`。
+    ? (process.platform === 'darwin'
+        ? path.join(path.dirname(app.getPath('exe')), '..', 'models')
+        : path.join(path.dirname(app.getPath('exe')), 'models'))
     : path.join(WEB_ROOT, 'models');
 } catch (_err) {
   MODELS_DIR = path.join(WEB_ROOT, 'models'); // 极端兜底：无法解析 exe 路径时退回 web/models
