@@ -15,6 +15,7 @@ VersionInfoCompany=Aerdgareo
 VersionInfoDescription=DesktopPetWeb 安装程序
 DefaultDirName=D:\DesktopPet
 DisableProgramGroupPage=yes
+DisableDirPage=no
 UninstallDisplayIcon={app}\DesktopPetWeb.exe
 OutputDir=..\dist-inno
 OutputBaseFilename=DesktopPetWeb.Setup.{#AppVer}.x64
@@ -42,6 +43,18 @@ Name: "{autodesktop}\DesktopPetWeb"; Filename: "{app}\DesktopPetWeb.exe"; Tasks:
 
 [Run]
 Filename: "{app}\DesktopPetWeb.exe"; Description: "启动 DesktopPetWeb"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; 卸载开始前强杀正在运行的应用（避免文件被占用导致残留）
+Filename: "{cmd}"; Parameters: "/c taskkill /f /im DesktopPetWeb.exe"; Flags: runhidden; RunOnceId: "KillDesktopPetOnUninstall"
+
+[UninstallDelete]
+; 强制清理（含旧版 NSIS 安装残留的 resources/ 等）：递归删除安装目录
+Type: filesandordirs; Name: "{app}\resources"
+Type: filesandordirs; Name: "{app}\models"
+Type: filesandordirs; Name: "{app}\locales"
+Type: filesandordirs; Name: "{app}\swiftshader"
+Type: filesandordirs; Name: "{app}"
 
 [Code]
 var
@@ -88,6 +101,19 @@ begin
   end;
 end;
 
+{ 在 HKCU / HKLM 中查找本程序旧版的卸载命令（Inno 卸载项按 AppId+_is1 命名） }
+function FindPrevUninstall(): String;
+var
+  S: String;
+begin
+  Result := '';
+  S := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}_is1';
+  if RegQueryStringValue(HKCU, S, 'UninstallString', Result) then Exit;
+  if RegQueryStringValue(HKLM, S, 'UninstallString', Result) then Exit;
+  if RegQueryStringValue(HKCU, S, 'QuietUninstallString', Result) then Exit;
+  RegQueryStringValue(HKLM, S, 'QuietUninstallString', Result);
+end;
+
 { 安装前：若检测到本程序已安装，询问用户是否先卸载旧版本，卸载后再安装 }
 function InitializeSetup(): Boolean;
 var
@@ -95,12 +121,13 @@ var
   ResultCode: Integer;
 begin
   Result := True;
-  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F1C6D2E-3A4B-4C5D-8E7F-0A1B2C3D4E5F}_is1', 'UninstallString', Uninst) then
+  Uninst := FindPrevUninstall();
+  if Uninst <> '' then
   begin
     if MsgBox('检测到已安装 DesktopPetWeb。' + #13#10 + '是否先卸载已安装的版本，然后再安装本版本？', mbConfirmation, MB_YESNO) = IDYES then
     begin
       Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-      Sleep(1000);
+      Sleep(1500);
     end;
   end;
 end;
