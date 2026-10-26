@@ -1,0 +1,16 @@
+# Tauri / Rust 构建产物
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# Node 工具链（Tauri CLI）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+# Live2D 内核（由 `npm run fetch-vendor` 拉取，不随仓库分发；见 THIRD-PARTY-NOTICES.md）
+web/vendor/live2d.min.js
+web/vendor/live2dcubismcore.min.js
+
+# 本地备份与本机构建产物
+_models_backup/
+dist/

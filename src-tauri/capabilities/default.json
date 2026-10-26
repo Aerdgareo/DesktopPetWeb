@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "桌面宠物主窗口的默认能力集：允许核心 event/window API（自定义 IPC 命令不受 ACL 限制），并开放 dialog 插件权限（文件/文件夹选择器）。",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

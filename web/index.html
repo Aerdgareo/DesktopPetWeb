@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="color-scheme" content="dark" />
+  <title>DesktopPetWeb · Live2D 渲染前端</title>
+  <style>
+    /* ==== 全透明页面：桌宠窗口不能有任何不透明底色 ==== */
+    :root { color-scheme: dark; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;   /* 关键：窗口透明 */
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      font-family: "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+
+    #pet-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: transparent;   /* 关键：canvas 透明 */
+      touch-action: none;
+      outline: none;
+    }
+
+    /* 启动状态 / 致命错误提示（加载完成后自动隐藏） */
+    #boot-status {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 80vw;
+      padding: 14px 20px;
+      border-radius: 12px;
+      background: rgba(18, 20, 28, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #e8e8f0;
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: center;
+      white-space: pre-wrap;
+      z-index: 9999;
+    }
+    #boot-status.hidden { display: none; }
+    #boot-status.error { border-color: rgba(255, 90, 90, 0.6); color: #ffd7d7; }
+
+    /* 轻量提示条（模型加载失败 / 导入结果等） */
+    #pet-toast {
+      position: fixed;
+      left: 50%;
+      top: 18px;
+      transform: translateX(-50%);
+      max-width: 70vw;
+      padding: 8px 16px;
+      border-radius: 999px;
+      background: rgba(18, 20, 28, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #e8e8f0;
+      font-size: 12px;
+      line-height: 1.5;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 10000;
+    }
+    #pet-toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <!-- PixiJS 渲染目标：全屏、透明 -->
+  <canvas id="pet-canvas"></canvas>
+
+  <div id="boot-status">正在加载 Live2D 运行时…</div>
+  <div id="pet-toast"></div>
+
+  <!--
+    ==== 本地运行时库（已本地化到 web/vendor/，纯离线，不依赖任何在线资源）====
+    加载顺序敏感：
+      1) pixi.js          —— 必须先于 pixi-live2d-display 加载（后者 UMD 直接读取 window.PIXI.utils）
+      2) live2d.min.js            —— Cubism 2.1 WebGL 运行时
+      3) live2dcubismcore.min.js  —— Cubism 4 核心运行时
+      4) pixi-live2d-display index.min.js —— 同时含 Cubism2 + Cubism4 适配（官方明确：要同时支持 2 与 4 代，
+         必须用 index.js，禁止 cubism2.js + cubism4.js 组合）
+    断网环境亦可启动（运行时随仓库分发；模型资源见 web/models/）。
+  -->
+  <script src="vendor/pixi.min.js"></script>
+  <script src="vendor/live2d.min.js"></script>
+  <script src="vendor/live2dcubismcore.min.js"></script>
+  <script src="vendor/pixi-live2d-display.min.js"></script>
+
+  <!-- 引导：校验本地运行时 → 启动应用模块（离线可用，无任何外链） -->
+  <script>
+    (function () {
+      'use strict';
+
+      var status = document.getElementById('boot-status');
+
+      function setStatus(text, isError) {
+        if (!status) return;
+        status.textContent = text;
+        status.classList.remove('hidden');
+        status.classList.toggle('error', !!isError);
+      }
+
+      function fail(text) {
+        setStatus(text, true);
+        console.error('[DesktopPetWeb]', text);
+      }
+
+      // 依赖检查（顺序敏感，必须逐个确认后再继续）
+      function hasPixi() { return !!(window.PIXI && window.PIXI.Application); }
+      function hasLive2D() { return !!window.Live2D; }
+      function hasCubismCore() { return !!window.Live2DCubismCore; }
+      function hasPixiLive2d() {
+        return !!(window.PIXI && window.PIXI.live2d && window.PIXI.live2d.Live2DModel);
+      }
+
+      function boot() {
+        try {
+          // 核心依赖缺失 = 运行时未随项目分发，直接给出明确指引
+          if (!hasPixi()) {
+            throw new Error('缺少本地运行时 vendor/pixi.min.js（请确认 web/vendor/ 已随项目分发）');
+          }
+          if (!hasLive2D()) {
+            console.warn('[DesktopPetWeb] vendor/live2d.min.js 不可用，Cubism 2.1 模型将无法加载');
+          }
+          if (!hasCubismCore()) {
+            console.warn('[DesktopPetWeb] vendor/live2dcubismcore.min.js 不可用，Cubism 3/4 模型将无法加载');
+          }
+          if (!hasPixiLive2d()) {
+            throw new Error('缺少本地运行时 vendor/pixi-live2d-display.min.js（请确认 web/vendor/ 已随项目分发）');
+          }
+
+          setStatus('运行时就绪，正在启动…');
+          // 动态导入应用主模块（ESM）
+          import('./src/main.js')
+            .then(function () {
+              if (status) status.classList.add('hidden');
+            })
+            .catch(function (err) {
+              fail(
+                '桌宠前端启动失败：' + (err && err.message ? err.message : err) + '\n\n' +
+                '本地预览请通过本地静态服务器打开（ESM 不支持 file:// 直开）。'
+              );
+            });
+        } catch (err) {
+          fail(
+            '桌宠前端启动失败：' + (err && err.message ? err.message : err) + '\n\n' +
+            '本项目运行时库已本地化到 web/vendor/，离线亦可运行；\n' +
+            '若缺失请确认 web/vendor/ 目录完整（详见 web/README.md）。'
+          );
+        }
+      }
+
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        boot();
+      } else {
+        window.addEventListener('DOMContentLoaded', boot, { once: true });
+      }
+    })();
+  </script>
+</body>
+</html>

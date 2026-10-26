@@ -1,0 +1,12 @@
+{
+  "_readme": "桌宠模型清单。字段：id(可选)、name(显示名)、url(必填)、type(可选，Cubism2/Cubism4，留空则按运行时自动识别)。url 为相对 web/ 的路径或 http(s) 绝对地址。本构建仅随附下列角色模型（版权归各自原作者，许可与再分发要求详见 THIRD-PARTY-NOTICES.md）；更多模型可用应用内“导入模型”或“外部模型文件夹”加载。",
+  "models": [
+    {
+      "id": "肥牛-cubism4",
+      "name": "肥牛",
+      "url": "models/肥牛-cubism4/feiniu.model3.json",
+      "type": "Cubism4"
+
+    }
+  ]
+}

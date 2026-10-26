@@ -1,0 +1,15 @@
+{
+  "name": "desktop-pet-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DesktopPetTauri - independent Tauri v2 shell with a self-contained web/ frontend",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "fetch-vendor": "node scripts/fetch-vendor.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}
