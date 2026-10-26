@@ -21,8 +21,8 @@
 
 | 平台 | 安装包 | 使用方式 |
 |---|---|---|
-| Windows（x64） | `DesktopPetLite.Setup.x.y.z.x64.exe`（NSIS） | 64 位 Windows 10/11（主流）；双击安装，默认装到 `D:\DesktopPet` |
-| Windows（x86） | `DesktopPetLite.Setup.x.y.z.x86.exe`（NSIS） | 32 位 Windows（老设备） |
+| Windows（x64） | `DesktopPetWeb.Setup.x.y.z.x64.exe`（**Inno Setup**） | 64 位 Windows 10/11（主流）；默认 `D:\DesktopPet`，可自选目录 |
+| Windows（x86） | `DesktopPetWeb.Setup.x.y.z.x86.exe`（**Inno Setup**） | 32 位 Windows（老设备） |
 | Linux | `DesktopPetWeb-x.y.z.AppImage` / `desktop-pet-web_x.y.z_amd64.deb` | AppImage：`chmod +x` 后直接运行；deb：`sudo dpkg -i xxx.deb` |
 | macOS（Apple 芯片） | `DesktopPetWeb-x.y.z-arm64.dmg` | 打开 dmg，将 App 拖入「应用程序」 |
 | macOS（Intel） | `DesktopPetWeb-x.y.z.dmg` | 同上 |
@@ -31,7 +31,7 @@
 
 ### 获取模型（来自 `DesktopPetModels-Setup.exe`）
 
-- **Windows**：直接双击 `DesktopPetModels-Setup.exe` 安装，按向导把模型安装到目标目录（默认安装到程序目录外部的 `models/`）。
+- **Windows**：直接双击 `DesktopPetModels-Setup.exe` 安装——它会**自动定位桌宠主程序目录**（查注册表 `Software\DesktopPet\InstallDir` 等）并把模型导入到其 `models\` 下（也可在向导里手动指定主程序目录）。
 - **Linux / macOS**：**无需安装，用压缩软件（如 7-Zip / Keka / 归档实用工具）直接打开 `DesktopPetModels-Setup.exe`，从中提取 `model` 相关文件即可**——该安装包本质是可解压的归档，提取出的模型目录即可直接使用。
 
 ### 加载模型

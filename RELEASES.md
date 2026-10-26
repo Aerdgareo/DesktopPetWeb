@@ -4,6 +4,32 @@
 
 ---
 
+## v1.0.4
+
+- **Release 页**：https://github.com/Aerdgareo/DesktopPetWeb/releases/tag/v1.0.4
+- **源码**：Git tag `v1.0.4`（提交 `f98fdf6`）
+- **发行产物（7 个附件）**
+
+  | 平台 | 文件 | 大小（字节） | 说明 |
+  |---|---|---:|---|
+  | Windows · x64 | `DesktopPetWeb.Setup.1.0.4.x64.exe` | 85,954,006 | **Inno Setup**；选目录后地址栏可见补 `DesktopPet`、安装前检测旧版并询问先卸载、卸载确认杀进程 + 清残留 |
+  | Windows · x86（32 位） | `DesktopPetWeb.Setup.1.0.4.x86.exe` | 81,603,807 | **Inno Setup**（同上；x64/x86 同脚本双架构产出） |
+  | Linux | `DesktopPetWeb-1.0.4.AppImage` | 112,053,xxx | CI（electron-builder）；免安装 |
+  | Linux | `desktop-pet-web_1.0.4_amd64.deb` | 79,2xx,xxx | CI；装到 `/opt/DesktopPetWeb` |
+  | macOS · Apple Silicon | `DesktopPetWeb-1.0.4-arm64.dmg` | 101,236,366 | CI（dmg 需 macOS 构建） |
+  | macOS · Intel | `DesktopPetWeb-1.0.4.dmg` | 107,263,955 | CI |
+  | 模型包 | `DesktopPetModels-Setup.exe` | 191,332,063 | **Inno Setup**（重构版）；导入到主程序目录下 `models\<模型名>\` |
+
+- **构建方式**：**Windows = Inno Setup（本机脚本 `build/inno-desktop-pet.iss`，`/D` 参数出 x64/x86）**；**Linux / macOS = CI**（`electron-builder`）。
+- **本版修复/要点**：
+  1. Windows 安装器改为 Inno：**选目录后地址栏可见补 `DesktopPet`**、**检测已装旧版**（Inno 或 NSIS 装的 1.0.0/1.0.1/1.0.2）并询问先卸载、卸载确认杀进程 + 强制清理残留；
+  2. 主安装器写入 `HKCU\Software\DesktopPet\InstallDir`，供**模型包自动定位**；
+  3. **模型包重构为 Inno Setup**（同目录 `inno-models.iss`），仍装到主程序目录下 `models\<模型名>\`；
+  4. 切换模型不再跳位、设置面板新增「重置模型位置」。
+- **默认安装路径**：**仅 Windows** 有"选目录 / 默认 `D:\DesktopPet`（无 D 盘退 `C:\DesktopPet`）"；**Linux（AppImage 免安装；deb 装到 `/opt/DesktopPetWeb`）、macOS（dmg 拖入「应用程序」）** 均**无此概念**。
+
+---
+
 ## v1.0.1
 
 - **Release 页**：https://github.com/Aerdgareo/DesktopPetWeb/releases/tag/v1.0.1
