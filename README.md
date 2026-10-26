@@ -4,8 +4,8 @@ Tauri v2 桌面外壳，**自带一份 `web/` 前端副本**（自包含、可�
 **系统托盘**、**逐区鼠标穿透** 与 **IPC 桥**。与本机另一处的 Electron 外壳工程
 （`D:\ICT\DesktopPetWeb`）**各自独立**；两者前端与外壳的接口契约（`bridge.js` ↔ 外壳）保持一致。
 
-> 本机（当前开发环境）**未安装 Rust / cargo，无法在此编译**。本目录交付的是
-> **完整源码 + 配置 + 构建说明**；请按下方「构建前置」在具备 Rust 工具链的机器上运行。
+> 构建需 **Rust 工具链 + WebView2 + MSVC Build Tools**（见下方「构建前置」）。
+> 本工程已在 Windows（Rust 1.99.1 + Tauri CLI 2.12.4）**本机构建通过**，产出单 exe 绿色版。
 
 ---
 
@@ -44,8 +44,7 @@ DesktopPetTauri/
 | **Node.js** | 仅用于运行 Tauri CLI（`@tauri-apps/cli`），建议 Node ≥ 18。 |
 | **C++ 生成工具** | Windows 上编译 Rust 需要 MSVC Build Tools（勾选「使用 C++ 的桌面开发」）。 |
 
-> ⚠️ 当前开发机 **没有** `rustc`/`cargo`，因此本目录的 Rust 代码 **未经编译验证**，
-> 只做了静态自检（见文末）。
+> 本工程已在 Windows 本机用 `cargo` / `tauri` **编译并打包成功**（单 exe 绿色版；详见文末「构建 / 分发说明」）。
 
 ---
 
@@ -209,18 +208,14 @@ await invoke('quit');
 
 ---
 
-## 静态自检（本机无 Rust，未编译）
+## 构建与自检
 
-由于本机没有 Rust/cargo，**未进行 `cargo build`**。已完成的静态自检：
+本工程已在 Windows 本机构建通过（Rust 1.99.1 + Tauri CLI 2.12.4）：
 
-- `tauri.conf.json`、`capabilities/default.json`、`package.json`、`icons/*` 均为合法
-  JSON / PNG / ICO（经解析验证）。
-- `Cargo.toml` 为合法 TOML（经解析验证）。
-- Rust 源码人工复核：括号 / `use` / 函数签名 / 宏（`generate_handler!`、`generate_context!`）
-  完整，导入项均有使用。
-
-**未覆盖**：`cargo check/build` 编译验证、运行时行为（透明/穿透/托盘）实测、`npx tauri dev` 实跑。
-请在有 Rust 工具链的机器上执行 `npm i -D @tauri-apps/cli && npx tauri dev` 完成最终验证。
+- **编译验证**：`cargo check` 通过；`tauri build --no-bundle`（x64 与 x86）均**构建成功**，产出单 exe。
+- **配置/资源自检**：`tauri.conf.json`、`capabilities/default.json`、`package.json`、`icons/*`
+  为合法 JSON / PNG / ICO；`Cargo.toml` 为合法 TOML；Rust 源码括号 / `use` / 宏完整。
+- **未覆盖**：运行时行为（透明 / 穿透 / 托盘）的**自动化实测**——需在真实桌面环境人工验证。
 
 > 本目录现已纳入 git 版本管理，并推送至本仓库的 `tauri` 分支（详见下节）。
 
@@ -252,6 +247,8 @@ await invoke('quit');
 
    - `DesktopPetTauri.1.0.4.x64.exe`（64 位）
    - `DesktopPetTauri.1.0.4.x86.exe`（32 位）
+
+   以上已在 [Releases](https://github.com/Aerdgareo/DesktopPetWeb/releases) 的 **v1.0.4** 提供下载。
 
 > 二进制发布物请放到 GitHub Releases，**不要提交进 Git 历史**（`dist/` 已在 `.gitignore` 中排除）。
 > 依 GPLv3，随 Release 须同时提供对应源码（给出本仓库链接即可）。
