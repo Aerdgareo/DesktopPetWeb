@@ -71,7 +71,8 @@
 - 运行依赖/素材：**不受 GPL-3.0-or-later 约束**，务必阅读 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)
   - **Live2D Cubism Core / Cubism 2 Core**：Live2D **专有许可**
   - **用户导入的角色模型**：版权归原作者，请勿提交到公开仓库（本仓库已 `.gitignore` 排除）
-  - **雨声 / 雷声音效**：`web/assets/audio/rain-loop.flac` 取自第三方视频音轨，**非 CC0、不可再分发（仅个人自用）**；
+  - **雨声 / 雷声音效**：`web/assets/audio/rain-loop.flac` 为 Freesound 的 **CC0-1.0** 真实录音
+    （sound `205958`，作者 bitkar），已裁为 15.00 s 无缝循环，**可再分发**；
     `thunder.wav` 为项目内自制 CC0-1.0（来源与许可见 `web/assets/audio/LICENSES.md`）
 - 其他开源依赖：Electron(MIT)、pixi.js(MIT)、pixi-live2d-display(MIT)
 

@@ -25,7 +25,7 @@ web/
 ├─ models/
 │  └─ models.json                 # 模型清单（可自行编辑；缺失则用内置演示模型）
 ├─ assets/
-│  └─ audio/                      # 雨声（外部 FLAC，非 CC0）/ 雷声（项目内自制 CC0-1.0）
+│  └─ audio/                      # 雨声（真实录音 FLAC，CC0-1.0）/ 雷声（项目内自制 CC0-1.0）
 │     ├─ rain-loop.flac
 │     ├─ thunder.wav
 │     └─ LICENSES.md              # 来源 / 许可 / SHA-256 记录
@@ -320,16 +320,16 @@ node --check /tmp/inline_0.js && node --check /tmp/inline_1.js
 
 ## 九、音频资源（`web/assets/audio/`）
 
-全屏雨效（`src/effects/rain.js`）所需的两份音频，**许可状况完全不同，请分别看待**：
+全屏雨效（`src/effects/rain.js`）所需的两份音频，**均为 CC0-1.0，可自由再分发**：
 
 | 文件 | 用途 | 参数 | 来源 / 许可 |
 | --- | --- | --- | --- |
-| `rain-loop.flac` | 循环雨声 | 30.00 s / 44.1 kHz 立体声 FLAC / 2,496,309 字节 | **外部来源（WE 主题视频《窗外下着雨.mp4》音轨提取），非 CC0，不可再分发** |
+| `rain-loop.flac` | 循环雨声 | 15.00 s / 44.1 kHz 立体声 FLAC / 863,830 字节 | **真实录音：Freesound `205958`（作者 bitkar）· CC0-1.0，可再分发** |
 | `thunder.wav` | 雷雨档雷声 | 4.00 s / 单声道 32000 Hz 16 bit PCM / 256,044 字节 | 项目内自制（`scripts/generate-rain-audio.mjs` 固定种子合成），**CC0-1.0** |
 
-- **⚠️ `rain-loop.flac` 不是 CC0、也不是公共领域素材**：本项目未取得再分发授权，
-  **仅限个人自用**；公开发布或再分发安装包前必须先移除或替换
-  （见 `assets/audio/LICENSES.md`「替代方案」）。
+- **`rain-loop.flac` 为 CC0-1.0 真实环境录音**（<https://freesound.org/people/bitkar/sounds/205958/>）：
+  截取 16.5 s、+14 dB 增益、1.5 s 等功率交叉淡化 → 15 s 无缝循环，**不含人声/音乐**，
+  可随本项目二进制/安装包自由再分发（CC0 不要求署名）。
 - **引用方式**：相对 `index.html` 的 `assets/audio/<name>.<ext>`（不使用 asset 协议）；
   代码按 `ogg → mp3 → flac → wav` 顺序探测（`AUDIO_EXTS`），当前命中 `.flac` / `.wav`。
 - **缺失容错**：文件缺失或不可播放时**不抛错**，雨照常渲染、音频静音，控制台 `console.warn` 一次。
