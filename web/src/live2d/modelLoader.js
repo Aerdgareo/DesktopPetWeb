@@ -14,6 +14,9 @@
  *  - 目录资源补齐：加载前经 bridge.scanModelResources 发现「目录里存在但入口清单未声明」的
  *    *.motion3.json / *.exp3.json / *.pose3.json，注入 ModelSettings 后再创建模型（见 buildInjectedSettings）。
  *  - 待机降频：关闭 pld 内置自动待机，改由本模块按 idleIntervalMs（3~6s）驱动播放（见 setupIdleScheduler）。
+ *  - 多实例（C-MODEL-INSTANCES@1）：实例注册表 `instances(Map)` + 绘制顺序 `order` + `activeId`；
+ *    `state.model` 是活动实例的 legacy 镜像（恒等于 instances.get(activeId)?.model）。
+ *    位置 / 表情 / 姿势 / 点击反应 / 待机调度按实例隔离；缩放百分比与透明度为全局设置（逐实例执行）。
  */
 
 import { bridge } from '../bridge.js';
@@ -44,19 +47,41 @@ const DEFAULT_OPTIONS = {
   // tapMotionGroups: ['Tap', 'tap_body', 'tap_head', 'flick_head', 'shake']
 };
 
-/** 模块内部状态 */
+/** 实例数量上限（R3-1：同一窗口最多同时显示 6 个模型） */
+const MAX_INSTANCES = 6;
+
+/**
+ * @typedef {Object} ModelInstance 模块内部实例记录（不对外暴露 model 对象）
+ * @property {string} id          实例标识（"inst-1"…，由调用方单调分配）
+ * @property {string} url         已解析的可加载 URL（asset:// 或相对/绝对路径）
+ * @property {string} rawUrl      原始路径（供持久化使用，禁止 asset://）
+ * @property {string} name        显示名
+ * @property {string} kind        'Cubism 2.1' | 'Cubism 4' | '未知'
+ * @property {object|null} model  Live2DModel
+ * @property {number} exprIndex   该实例当前表情索引（-1 = 未选）
+ * @property {number} poseIndex   该实例当前动作组索引（-1 = 未选）
+ * @property {number} lastPlayedExpr 该实例最近一次点击反应播放的表情索引
+ * @property {number} reactionUntil  该实例点击反应锁截止时间戳
+ * @property {object|null} idle   该实例待机调度状态 { idleGroup, interval, speed, playCount }
+ * @property {Function|null} idleTick 该实例待机调度在 app.ticker 上的回调引用
+ */
+
+/**
+ * 模块内部状态（多实例注册表 + 活动实例镜像）。
+ *
+ * 不变式：`state.model` 恒等于 `instances.get(activeId)?.model`，
+ * 任何改变活动实例的操作（setActiveInstance / addInstance 首个 / removeInstance 回退 /
+ * loadModel 替换 / unloadAll）之后都必须调用 `syncLegacyMirror()` 同步。
+ */
 const state = {
-  app: null,          // PIXI.Application
-  model: null,        // 当前 Live2DModel
-  lastModelKind: '未知', // 最近一次加载模型的 Cubism 版本（运行时判定）
+  app: null,            // PIXI.Application
+  instances: new Map(), // id -> ModelInstance
+  order: [],            // 创建顺序的 id（= stage 子节点绘制顺序，后者在上层）
+  activeId: null,       // 活动实例 id（无实例 → null）
+  model: null,          // legacy 镜像：=== instances.get(activeId)?.model
+  lastModelKind: '未知', // legacy 镜像：活动实例的 Cubism 版本（运行时判定）
   options: { ...DEFAULT_OPTIONS, tapMotionGroups: ['Tap', 'tap_body', 'tap_head', 'flick_head', 'shake'] },
-  loading: null,      // 正在进行的加载 Promise（防并发切换竞态）
-  expressionIndex: -1, // 当前已选表情索引（0 基；-1 = 未选/无）
-  poseIndex: -1,        // 当前已选动作组索引（0 基；-1 = 未选/无）
-  lastPlayedExpr: -1,   // 最近一次点击反应播放的表情索引（用于避免连点重复同一表情）
-  reactionUntil: 0,     // 点击反应锁截止时间戳（重入保护；reactTap 与待机调度共用）
-  idle: null,           // 待机调度状态 { idleGroup, interval, speed, playCount }
-  idleTick: null        // 待机调度在 app.ticker 上的回调引用（用于停用）
+  loading: null         // 全局串行加载队列（防并发切换竞态）
 };
 
 /** 关闭 pld 内置自动待机时，给 motionManager.groups.idle 填的「不存在的组名」 */
@@ -130,49 +155,146 @@ function getModelOptions() {
   };
 }
 
-/** 返回当前模型实例（可能为 null） */
-function currentModel() {
-  return state.model;
+// ---------------- 实例注册表基础操作 ----------------
+
+/** 归一化实例 id（非字符串/空白 → 空串） */
+function normalizeInstanceId(id) {
+  return (typeof id === 'string' && id.trim()) ? id.trim() : '';
 }
 
-/** 销毁并移除当前模型 */
-function destroyCurrentModel() {
-  const model = state.model;
-  stopIdleScheduler();
-  state.reactionUntil = 0;
-  if (!model) return;
+/**
+ * 由模型 URL 派生显示名（取文件名并去掉 .model.json / .model3.json 后缀）。
+ * @param {string} url
+ * @returns {string}
+ */
+function deriveNameFromUrl(url) {
+  const s = String(url || '');
+  const file = s.split(/[\\/]/).pop() || '';
+  const name = file.replace(/\.model3?\.json(\?|#|$)/i, '');
+  return name || 'model';
+}
 
+/** 当前活动实例（无 → null） */
+function getActiveInstance() {
+  const id = state.activeId;
+  return id ? (state.instances.get(id) || null) : null;
+}
+
+/** 当前活动实例的 model（无 → null；兜底 state.model 以兼容单实例期） */
+function getActiveModel() {
+  const inst = getActiveInstance();
+  if (inst && inst.model) return inst.model;
+  return state.model || null;
+}
+
+/**
+ * 同步 legacy 镜像：state.model / state.lastModelKind。
+ * 必须在任何改变 activity（或活动实例的模型）的操作之后调用。
+ */
+function syncLegacyMirror() {
+  const inst = state.activeId ? (state.instances.get(state.activeId) || null) : null;
+  state.model = (inst && inst.model) ? inst.model : null;
+  state.lastModelKind = (inst && inst.kind) ? inst.kind : '未知';
+}
+
+/** 按 order 重建 stage 绘制顺序（后加入者在上层；移除后不重排其余实例相对顺序） */
+function applyStageOrder() {
+  const app = state.app;
+  if (!app || !app.stage || !Array.isArray(app.stage.children)) return;
+  for (const id of state.order) {
+    const inst = state.instances.get(id);
+    const model = inst && inst.model;
+    if (!model) continue;
+    try {
+      const idx = app.stage.children.indexOf(model);
+      if (idx < 0) continue;
+      const last = app.stage.children.length - 1;
+      if (idx !== last) app.stage.setChildIndex(model, last);
+    } catch (_) { /* 忽略 */ }
+  }
+}
+
+/** 取窗口（渲染 screen）尺寸，取不到时回退 window.innerWidth/Height；下限 1 */
+function getScreenSize() {
+  const app = state.app;
+  const screen = app && app.renderer && app.renderer.screen;
+  if (screen && isFinite(screen.width) && isFinite(screen.height)) {
+    return { W: Math.max(1, screen.width), H: Math.max(1, screen.height) };
+  }
+  const w = (typeof window !== 'undefined') ? Number(window.innerWidth) : NaN;
+  const h = (typeof window !== 'undefined') ? Number(window.innerHeight) : NaN;
+  return {
+    W: Math.max(1, isFinite(w) ? w : 1),
+    H: Math.max(1, isFinite(h) ? h : 1)
+  };
+}
+
+/**
+ * 销毁一个 Live2DModel 对象（移除 stage + destroy），不影响实例注册表。
+ * @param {object|null} model
+ * @param {object|null} [app]
+ */
+function destroyModelObject(model, app) {
+  if (!model) return;
   // 先停止逐帧更新：避免销毁瞬间仍被 Ticker 驱动 update/draw
   // （否则 Cubism 核心会抛出 "call update() before draw()" 类告警）
   try { model.autoUpdate = false; } catch (_) { /* 忽略 */ }
 
   try {
-    if (state.app && state.app.stage && model.parent === state.app.stage) {
-      state.app.stage.removeChild(model);
-    }
+    if (app && app.stage && model.parent === app.stage) app.stage.removeChild(model);
   } catch (err) {
-    console.warn('[modelLoader] 移除旧模型失败:', err);
+    console.warn('[modelLoader] 移除模型失败:', err);
   }
   try {
     model.destroy({ children: true, texture: false, baseTexture: false });
   } catch (err) {
-    console.warn('[modelLoader] 销毁旧模型失败:', err);
+    console.warn('[modelLoader] 销毁模型失败:', err);
   }
-  state.model = null;
-  state.lastModelKind = '未知';
-  state.expressionIndex = -1;
-  state.poseIndex = -1;
-  state.lastPlayedExpr = -1;
-
+  try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
 }
 
 /**
- * 把模型按窗口尺寸缩放并锚定（默认底部居中）。
+ * 销毁实例的模型并停止其待机调度（不改变注册表）。
+ * 只操作该实例自己的 tick，不影响其它实例的待机。
+ * @param {ModelInstance|null} inst
+ */
+function destroyInstanceModel(inst) {
+  if (!inst) return;
+  stopIdleScheduler(inst);
+  inst.reactionUntil = 0;
+  const model = inst.model;
+  inst.model = null;
+  if (model) destroyModelObject(model, state.app);
+}
+
+/** 返回当前模型实例（活动实例；可能为 null） */
+function currentModel() {
+  return state.model;
+}
+
+/** 生成实例快照（不含 model 对象） */
+function snapshotOf(inst) {
+  if (!inst) return null;
+  return {
+    id: inst.id,
+    url: inst.url,
+    rawUrl: inst.rawUrl,
+    name: inst.name,
+    kind: inst.kind || '未知',
+    x: inst.model ? (Number(inst.model.x) || 0) : 0,
+    y: inst.model ? (Number(inst.model.y) || 0) : 0,
+    active: state.activeId === inst.id
+  };
+}
+
+/**
+ * 把「某个实例」的模型按窗口尺寸缩放并锚定（默认底部居中）。
+ * @param {ModelInstance} inst 实例记录
  * @param {{ preservePosition?: boolean }} [opts]
  *        preservePosition = true 时不重置 x/y（拖拽后自适应窗口时用）
  */
-function fitToWindow(opts = {}) {
-  const model = state.model;
+function fitInstanceToWindow(inst, opts = {}) {
+  const model = inst && inst.model;
   const app = state.app;
   if (!model || !app) return;
 
@@ -245,28 +367,61 @@ function fitToWindow(opts = {}) {
 }
 
 /**
- * 设置透明度（0~1）。
+ * 对全部实例重排：窗口 resize / 全局缩放时调用（单个实例异常不影响其它实例）。
+ * @param {{ preservePosition?: boolean }} [opts]
+ */
+function refreshFitAll(opts = {}) {
+  for (const id of state.order.slice()) {
+    const inst = state.instances.get(id);
+    if (!inst || !inst.model) continue;
+    try { fitInstanceToWindow(inst, opts); } catch (err) {
+      console.warn('[modelLoader] 适配实例失败（忽略）:', id, err);
+    }
+  }
+}
+
+/**
+ * 对指定实例重新适配。
+ * @param {string} id 实例 id
+ * @param {{ preservePosition?: boolean }} [opts]
+ */
+function fitInstance(id, opts = {}) {
+  const inst = state.instances.get(normalizeInstanceId(id));
+  if (!inst || !inst.model) return;
+  fitInstanceToWindow(inst, opts);
+}
+
+/**
+ * 把「所有」模型按窗口尺寸缩放并锚定（既有导出；多实例下等价 refreshFitAll）。
+ * @param {{ preservePosition?: boolean }} [opts]
+ *        preservePosition = true 时不重置 x/y（拖拽后自适应窗口时用）
+ */
+function fitToWindow(opts = {}) {
+  refreshFitAll(opts);
+}
+
+/**
+ * 设置透明度（0~1）。全局设置：对所有实例生效。
  * @param {number} alpha
  */
 function setAlpha(alpha) {
   state.options.alpha = clamp(Number(alpha), 0, 1);
+  for (const id of state.order.slice()) {
+    const inst = state.instances.get(id);
+    if (!inst || !inst.model) continue;
+    try { inst.model.alpha = state.options.alpha; } catch (_) { /* 忽略 */ }
+  }
   if (state.model) state.model.alpha = state.options.alpha;
 }
 
 /**
- * 设置缩放百分比（相对基准自适应尺寸）。
- * @param {number} percent 50~300 常用
+ * 对单个实例执行「缩放以可见中心为原点、不改变屏幕位置」的调整。
+ * @param {ModelInstance} inst
  */
-function setScalePercent(percent) {
-  state.options.scalePercent = clamp(Number(percent) || 0, 1, 1000);
-
-  // 目标：缩放「以人物可见中心为原点、不改变人物屏幕位置」。
-  // 做法：记录缩放前的人物可见中心（stage 全局）与旧缩放 s0、原点 (x0,y0)；
-  //   内容中心相对原点的「局部偏移」cLocal = (center - 原点)/s0 不随缩放变化，
-  //   故令新原点 = 原屏幕中心 - cLocal*s1，即可解析式保持屏幕中心不动（不依赖二次测量）。
-  const model = state.model;
+function applyScaleToInstance(inst) {
+  const model = inst && inst.model;
   const app = state.app;
-  if (!model) { fitToWindow({ preservePosition: true }); return; }
+  if (!model) return;
 
   const s0 = model.scale ? model.scale.x : 1;
   const x0 = model.x;
@@ -274,7 +429,7 @@ function setScalePercent(percent) {
   let c0 = null;
   try { c0 = getContentBounds(model, true); } catch (_) { c0 = null; }
 
-  fitToWindow({ preservePosition: true }); // 设定新 scale（x/y 暂被夹取，随后我们按中心回推）
+  fitInstanceToWindow(inst, { preservePosition: true }); // 设定新 scale（x/y 暂被夹取，随后我们按中心回推）
 
   if (c0 && c0.width > 0 && c0.height > 0 && s0 > 0) {
     const centerX0 = c0.x + c0.width / 2;
@@ -298,40 +453,79 @@ function setScalePercent(percent) {
   try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
 }
 
+/**
+ * 设置缩放百分比（相对基准自适应尺寸）。全局设置：逐实例保持「可见中心不动」。
+ * @param {number} percent 50~300 常用
+ */
+function setScalePercent(percent) {
+  state.options.scalePercent = clamp(Number(percent) || 0, 1, 1000);
+
+  // 目标：缩放「以人物可见中心为原点、不改变人物屏幕位置」。
+  // 做法：记录缩放前的人物可见中心（stage 全局）与旧缩放 s0、原点 (x0,y0)；
+  //   内容中心相对原点的「局部偏移」cLocal = (center - 原点)/s0 不随缩放变化，
+  //   故令新原点 = 原屏幕中心 - cLocal*s1，即可解析式保持屏幕中心不动（不依赖二次测量）。
+  let any = false;
+  for (const id of state.order.slice()) {
+    const inst = state.instances.get(id);
+    if (!inst || !inst.model) continue;
+    any = true;
+    try {
+      applyScaleToInstance(inst);
+    } catch (err) {
+      console.warn('[modelLoader] 缩放实例失败（忽略）:', id, err);
+    }
+  }
+  if (!any) refreshFitAll({ preservePosition: true });
+}
+
 /** 读取当前缩放百分比（供滚轮缩放等增量调节使用） */
 function getScalePercent() {
   return Number(state.options.scalePercent) || 0;
 }
 
-/** 重置人物位置：恢复到默认锚点（底部居中），不改变缩放 */
+/** 重置人物位置：恢复到默认锚点（底部居中），不改变缩放（作用于活动实例） */
 function resetModelPosition() {
-  if (!state.model) return;
-  fitToWindow({ preservePosition: false });
+  const inst = getActiveInstance();
+  if (!inst || !inst.model) return;
+  fitInstanceToWindow(inst, { preservePosition: false });
 }
 
 /**
- * 加载模型（自动识别 Cubism 2 / Cubism 4）。
- * @param {string} url 模型清单地址（.model.json 或 .model3.json，也可为对象 URL）
- * @param {object} [loadOptions] 覆盖本次加载的插件选项
- * @returns {Promise<object>} Live2DModel
+ * 全局串行加载队列（保持既有防竞态语义）：所有模型加载都经此排队。
+ * @template T
+ * @param {() => Promise<T>} worker
+ * @returns {Promise<T>}
  */
-function loadModel(url, loadOptions) {
-  if (!url) return Promise.reject(new Error('loadModel 需要模型 URL'));
-
-  // 串行化：避免快速切换时的竞态
+function enqueueLoad(worker) {
   const task = (state.loading || Promise.resolve())
     .catch(() => { /* 忽略上一次失败，继续本次加载 */ })
-    .then(() => doLoad(url, loadOptions));
+    .then(() => worker());
 
   state.loading = task.catch(() => { /* 仅用于队列，不阻塞下一次 */ });
   return task;
 }
 
-async function doLoad(url, loadOptions) {
+/**
+ * 在指定实例上加载模型（内部核心流程：扫描补齐 → 创建 → 入 stage → 待机 → 适配）。
+ *
+ * 失败原子性：任一步抛错时，实例 `inst.model` 保持原值（替换场景旧模型不会被销毁），
+ * 也不会向 stage 之外的注册表写入任何状态 —— 由调用方决定是否登记该实例。
+ *
+ * @param {ModelInstance} inst 目标实例记录（尚未登记或已登记均可）
+ * @param {object} [loadOptions] 透传 pixi-live2d-display 的加载选项
+ * @param {{ preservePosition?: boolean, x?: number, y?: number }} [opts]
+ * @returns {Promise<object>} Live2DModel
+ */
+async function loadIntoInstance(inst, loadOptions, opts = {}) {
   const app = state.app;
   if (!app) throw new Error('请先调用 modelLoader.init(app)');
   const Live2DModel = getLive2DModelClass();
   const o = state.options;
+  const url = inst.url;
+  const oldModel = inst.model || null;
+  const oldKind = inst.kind;
+  // 该实例加载前是否已在注册表中（用于检测「加载期间被移除」）
+  const wasRegistered = state.instances.get(inst.id) === inst;
 
   const modelOptions = {
     autoUpdate: o.autoUpdate,
@@ -339,15 +533,6 @@ async function doLoad(url, loadOptions) {
     ...(loadOptions || {})
   };
   if (o.idleMotionGroup) modelOptions.idleMotionGroup = o.idleMotionGroup;
-
-  // 切换模型：先记录旧模型的位置（下面的 destroyCurrentModel 会清掉 state.model），加载新模型后回填
-  const prevModel = state.model;
-  const hadPrevModel = !!prevModel;
-  const prevX = prevModel ? prevModel.x : 0;
-  const prevY = prevModel ? prevModel.y : 0;
-
-  // 先销毁旧模型，再加载新模型
-  destroyCurrentModel();
 
   // ① 目录资源补齐：先扫描目录（外壳能力），再「先取 settings → 注入扫描结果 → 再创建模型」
   const scan = await scanResourcesSafe(url);
@@ -387,32 +572,346 @@ async function doLoad(url, loadOptions) {
     console.warn('[modelLoader] 设置 anchor 失败（已忽略）:', err);
   }
   model.autoUpdate = o.autoUpdate;
+
+  // 防御：加载期间该实例已被移除（并发 removeInstance）→ 丢弃刚创建的模型，不产生悬挂引用
+  if (wasRegistered && state.instances.get(inst.id) !== inst) {
+    destroyModelObject(model, app);
+    throw new Error(`实例已移除：${inst.id}`);
+  }
+
   app.stage.addChild(model);
 
-  state.model = model;
+  // 就位：切换实例的 model 引用（此后该实例的所有状态只作用于新模型）
+  inst.model = model;
+  inst.kind = detectCubismKind(model);
 
-  // 未声明 Expressions 的 Cubism4 模型：由伴生 vtube.json 发现并挂载可用表情（声明/扫描优先，回退不阻断显示）
-  await attachDiscoveredExpressions(model);
+  try {
+    // 未声明 Expressions 的 Cubism4 模型：由伴生 vtube.json 发现并挂载可用表情（声明/扫描优先，回退不阻断显示）
+    await attachDiscoveredExpressions(model);
 
-  // ② 待机降频：关闭 pld 内置自动待机，改由本模块按间隔驱动
-  setupIdleScheduler(model);
+    // ② 待机降频：关闭 pld 内置自动待机，改由本模块按间隔驱动（只驱动该实例）
+    setupIdleScheduler(model, inst);
 
-  // 适配尺寸并应用透明度
-  fitToWindow({ preservePosition: hadPrevModel });
-  if (hadPrevModel) { model.x = prevX; model.y = prevY; } // 切换：回填旧位置
+    // 适配尺寸并应用透明度
+    const preserve = opts.preservePosition === true;
+    fitInstanceToWindow(inst, { preservePosition: preserve });
+    if (preserve) {
+      // 替换模型：回填该实例上一位置，并夹取到窗口内（R3-11：位置不得超出窗口导致不可见）
+      const px = Number(opts.x);
+      const py = Number(opts.y);
+      if (isFinite(px) && isFinite(py)) {
+        const { W, H } = getScreenSize();
+        model.x = clamp(px, 0, W);
+        model.y = clamp(py, 0, H);
+        try { contentBoundsCache.delete(model); } catch (_) { /* 忽略 */ }
+      }
+    }
+
+    // 按 order 重建绘制层级（替换下层实例时不得跑到最上层）
+    applyStageOrder();
+
+    // 替换场景：新模型全部就位后，才销毁旧模型（失败原子性）
+    if (oldModel && oldModel !== model) destroyModelObject(oldModel, app);
+  } catch (err) {
+    // 回滚：丢弃新模型、恢复旧引用与该实例的待机调度（不留下半成品状态）
+    stopIdleScheduler(inst);
+    inst.model = oldModel;
+    inst.kind = oldKind;
+    destroyModelObject(model, app);
+    if (oldModel) {
+      try { setupIdleScheduler(oldModel, inst); } catch (_) { /* 忽略 */ }
+    }
+    throw err;
+  }
 
   // 记录并按运行时类型判定 Cubism 版本（供日志与设置面板标注；不依赖清单字段猜测）
-  state.lastModelKind = detectCubismKind(model);
   try {
     const internalModel = model.internalModel || {};
     const settings = internalModel.settings || {};
     console.info(
-      `[modelLoader] 已加载模型 "${settings.name || url}"（${state.lastModelKind}）` +
+      `[modelLoader] 已加载模型 "${settings.name || inst.name || url}"（${inst.kind}，实例 ${inst.id}）` +
       `，画布 ${internalModel.width || '?'}x${internalModel.height || '?'}`
     );
   } catch (_) { /* 仅日志，忽略 */ }
 
   return model;
+}
+
+/**
+ * 新增一个模型实例（加载并加入 stage）。
+ *
+ * 契约（C-MODEL-INSTANCES@1）：
+ *  - id 非空且未占用，否则 reject；实例数已达 MAX_INSTANCES → reject；
+ *  - 加载失败 → 不占用 id、不写 order、不入 stage（调用方可直接用同一 id 重试）；
+ *  - 首个实例自动成为活动实例；后续实例的激活由调用方显式 setActiveInstance。
+ *
+ * @param {{ id: string, url: string, rawUrl?: string, name?: string }} spec
+ * @param {object} [loadOptions] 透传给 pixi-live2d-display
+ * @returns {Promise<{id:string,url:string,rawUrl:string,name:string,kind:string,x:number,y:number,active:boolean}>}
+ * @throws {Error} id 已存在 / 超过 6 个 / 加载失败 / 未 init
+ */
+async function addInstance(spec, loadOptions) {
+  if (!state.app) throw new Error('请先调用 modelLoader.init(app)');
+
+  const s = spec || {};
+  const id = normalizeInstanceId(s.id);
+  if (!id) throw new Error('addInstance 需要非空实例 id');
+  const url = (typeof s.url === 'string' && s.url) ? s.url : '';
+  if (!url) throw new Error('addInstance 需要模型 URL');
+
+  // 快速失败（非权威校验；权威校验在串行队列内再做一次）
+  if (state.instances.has(id)) throw new Error(`实例 id 已存在：${id}`);
+  if (state.instances.size >= MAX_INSTANCES) throw new Error('最多同时显示 6 个模型');
+
+  const inst = {
+    id,
+    url,
+    rawUrl: (typeof s.rawUrl === 'string' && s.rawUrl) ? s.rawUrl : url,
+    name: (typeof s.name === 'string' && s.name.trim()) ? s.name.trim() : deriveNameFromUrl(url),
+    kind: '未知',
+    model: null,
+    exprIndex: -1,
+    poseIndex: -1,
+    lastPlayedExpr: -1,
+    reactionUntil: 0,
+    idle: null,
+    idleTick: null
+  };
+
+  await enqueueLoad(async () => {
+    // 串行区内再校验一次（并发 addInstance 也不会突破上限或重复 id）
+    if (state.instances.has(id)) throw new Error(`实例 id 已存在：${id}`);
+    if (state.instances.size >= MAX_INSTANCES) throw new Error('最多同时显示 6 个模型');
+    return loadIntoInstance(inst, loadOptions);
+  });
+
+  const isFirst = state.instances.size === 0;
+  state.instances.set(id, inst);
+  state.order.push(id);
+  if (isFirst || !state.activeId) state.activeId = id;
+  syncLegacyMirror();
+  applyStageOrder();
+
+  return snapshotOf(inst);
+}
+
+/**
+ * 实例快照数组（按创建顺序；不含 model 对象）。
+ * @returns {Array<{id:string,url:string,rawUrl:string,name:string,kind:string,x:number,y:number,active:boolean}>}
+ */
+function getInstances() {
+  const out = [];
+  for (const id of state.order) {
+    const inst = state.instances.get(id);
+    if (inst) out.push(snapshotOf(inst));
+  }
+  return out;
+}
+
+/**
+ * 单个实例快照；不存在 → null。
+ * @param {string} id
+ */
+function getInstance(id) {
+  const inst = state.instances.get(normalizeInstanceId(id));
+  return inst ? snapshotOf(inst) : null;
+}
+
+/**
+ * 设置活动实例（同步 legacy `state.model`）。
+ * @param {string} id
+ * @returns {boolean} id 不存在 → false
+ */
+function setActiveInstance(id) {
+  const key = normalizeInstanceId(id);
+  if (!key || !state.instances.has(key)) return false;
+  state.activeId = key;
+  syncLegacyMirror();
+  return true;
+}
+
+/**
+ * 当前活动实例 id；无 → null。
+ * @returns {string|null}
+ */
+function getActiveInstanceId() {
+  return state.activeId || null;
+}
+
+/**
+ * 移除实例：销毁 model、移除 stage、停该实例的 idle 与状态；不删磁盘文件。
+ * 若移除的是活动实例，活动实例回退为剩余实例中最上层者（order 末尾）；无剩余 → null。
+ * @param {string} id
+ * @returns {boolean} 是否实际移除
+ */
+function removeInstance(id) {
+  const key = normalizeInstanceId(id);
+  const inst = key ? state.instances.get(key) : null;
+  if (!inst) return false;
+
+  destroyInstanceModel(inst);
+  state.instances.delete(key);
+
+  const idx = state.order.indexOf(key);
+  if (idx >= 0) state.order.splice(idx, 1);
+
+  if (state.activeId === key) {
+    state.activeId = state.order.length ? state.order[state.order.length - 1] : null;
+  }
+  syncLegacyMirror();
+  return true;
+}
+
+/**
+ * 恢复用：写入位置并夹取到窗口 [0,W]/[0,H]。
+ * @param {string} id
+ * @param {number} x 窗口内 CSS 像素
+ * @param {number} y 窗口内 CSS 像素
+ * @returns {boolean} 实例不存在 → false
+ */
+function setInstancePosition(id, x, y) {
+  const inst = state.instances.get(normalizeInstanceId(id));
+  if (!inst || !inst.model) return false;
+
+  const { W, H } = getScreenSize();
+  inst.model.x = clamp(Number(x) || 0, 0, W);
+  inst.model.y = clamp(Number(y) || 0, 0, H);
+  try { if (typeof inst.model.updateTransform === 'function') inst.model.updateTransform(); } catch (_) { /* 忽略 */ }
+  try { contentBoundsCache.delete(inst.model); } catch (_) { /* 忽略 */ }
+  return true;
+}
+
+/**
+ * 设置实例的「原始路径」rawUrl（供持久化使用）。
+ *
+ * 为什么需要：`loadModel()` 只替换模型、不重新登记实例，调用方若手里有更准确的原始路径
+ * （如导入/外部的磁盘路径），可在加载后用它直接校正实例 rawUrl，而不必重新加载模型。
+ * 约束与 instances.js 一致：rawUrl 禁止为 asset:// 地址（外壳临时协议，重启后不可用）。
+ *
+ * @param {string} id 实例 id
+ * @param {string} rawUrl 原始路径（非空字符串）
+ * @returns {boolean} 实例不存在 / rawUrl 非空字符串校验失败 → false
+ */
+function setInstanceRawUrl(id, rawUrl) {
+  const key = normalizeInstanceId(id);
+  const inst = key ? state.instances.get(key) : null;
+  if (!inst) return false;
+  const raw = (typeof rawUrl === 'string') ? rawUrl.trim() : '';
+  if (!raw) return false;
+  inst.rawUrl = raw;
+  return true;
+}
+
+/**
+ * 读取实例位置（窗口内 CSS 像素）。
+ * @param {string} id
+ * @returns {{x:number,y:number}|null}
+ */
+function getInstancePosition(id) {
+  const inst = state.instances.get(normalizeInstanceId(id));
+  if (!inst || !inst.model) return null;
+  return { x: Number(inst.model.x) || 0, y: Number(inst.model.y) || 0 };
+}
+
+/**
+ * 销毁全部实例（应用退出/重载用）。
+ */
+function unloadAll() {
+  for (const inst of Array.from(state.instances.values())) {
+    destroyInstanceModel(inst);
+  }
+  state.instances.clear();
+  state.order = [];
+  state.activeId = null;
+  syncLegacyMirror();
+}
+
+/**
+ * 拆出 `loadOptions.rawUrl` 并返回其余「透传给 pixi-live2d-display」的选项。
+ *
+ * rawUrl 是本工程实例持久化专用的原始路径（禁止 asset://），不属于插件选项，
+ * 因此必须从透传对象中剥离，避免污染 `Live2DModel.from(url, options)` 的入参。
+ *
+ * @param {object|null|undefined} loadOptions
+ * @returns {{ rawUrl: string, options: object|undefined }}
+ */
+function splitRawUrlOption(loadOptions) {
+  if (!loadOptions || typeof loadOptions !== 'object') return { rawUrl: '', options: loadOptions };
+  const { rawUrl, ...rest } = loadOptions;
+  const raw = (typeof rawUrl === 'string') ? rawUrl.trim() : '';
+  const hasRest = Object.keys(rest).length > 0;
+  return { rawUrl: raw, options: hasRest ? rest : undefined };
+}
+
+/**
+ * 加载模型（自动识别 Cubism 2 / Cubism 4）。
+ *
+ * 语义（兼容既有单模型用法）：
+ *  - 无实例 → 等价 `addInstance({ id: 'inst-1', url })`，自动成为活动实例；
+ *  - 有实例 → **替换活动实例的模型**（保留该实例 id/name 与其位置 x/y）；
+ *    旧模型在新模型成功就位后才销毁（加载失败不破坏现有实例）。
+ *
+ * rawUrl 同步（R3-3）：替换场景必须同步实例 rawUrl —— instances.js 持久化时优先取实例快照的
+ * rawUrl，只更新 url 会让磁盘记录仍指向旧模型，重启后又恢复成旧模型。
+ *  - `loadOptions.rawUrl` 为非空字符串 → 加载成功后同步写入实例；
+ *  - 未提供 → 保留旧 rawUrl，并显式告警（不阻断加载，但重启可能恢复旧模型）。
+ *
+ * @param {string} url 模型清单地址（.model.json 或 .model3.json，也可为对象 URL）
+ * @param {object} [loadOptions] 覆盖本次加载的插件选项；额外支持 `rawUrl`（实例持久化用原始路径）
+ * @returns {Promise<object>} Live2DModel
+ */
+async function loadModel(url, loadOptions) {
+  if (!url) throw new Error('loadModel 需要模型 URL');
+  const target = String(url);
+  const { rawUrl, options } = splitRawUrlOption(loadOptions);
+  const active = getActiveInstance();
+
+  if (!active) {
+    // 首个实例：rawUrl 随 spec 一并登记（缺省时由 addInstance 退化为 url，行为不变）
+    const spec = rawUrl ? { id: 'inst-1', url: target, rawUrl } : { id: 'inst-1', url: target };
+    const snap = await addInstance(spec, options);
+    const created = state.instances.get(snap.id);
+    return created ? created.model : null;
+  }
+
+  const hadPrevModel = !!active.model;
+  const prevX = hadPrevModel ? active.model.x : 0;
+  const prevY = hadPrevModel ? active.model.y : 0;
+
+  // 替换的是「模型」：实例 id / name 与其位置保持不变，仅切换可加载 URL
+  const prevUrl = active.url;
+  const prevRawUrl = active.rawUrl;
+  active.url = target;
+  try {
+    await enqueueLoad(() => {
+      // 串行等待期间活动实例可能被移除 → 明确失败，避免向已移除实例加载
+      if (state.instances.get(active.id) !== active) {
+        throw new Error(`实例已移除：${active.id}`);
+      }
+      return loadIntoInstance(active, options, {
+        preservePosition: hadPrevModel,
+        x: prevX,
+        y: prevY
+      });
+    });
+  } catch (err) {
+    // 失败回滚：instance.url 恢复为上一次成功加载的地址，避免快照与模型不一致
+    active.url = prevUrl;
+    throw err;
+  }
+
+  // 仅在加载成功后同步 rawUrl（失败路径不改动，天然保持旧值）
+  if (rawUrl) {
+    active.rawUrl = rawUrl;
+  } else {
+    console.warn(
+      `[modelLoader] loadModel 未提供 loadOptions.rawUrl，实例 ${active.id} 保留原 rawUrl` +
+      `（${prevRawUrl || '空'}）→ 持久化后重启可能恢复为旧模型`
+    );
+  }
+
+  syncLegacyMirror();
+  return active.model;
 }
 
 // ---------------- ① 目录资源扫描 / 注入（补齐入口清单未声明的动作、表情、姿势） ----------------
@@ -700,42 +1199,73 @@ function detectCubismKind(model) {
  * @returns {'Cubism 2.1'|'Cubism 4'|'未知'}
  */
 function getModelKind() {
-  return state.model ? detectCubismKind(state.model) : (state.lastModelKind || '未知');
+  const model = getActiveModel();
+  return model ? detectCubismKind(model) : (state.lastModelKind || '未知');
 }
 
 /**
  * 切换模型（loadModel 的语义别名，便于设置面板调用）。
+ * 单实例时 = 换模型；多实例时 = 替换活动实例的模型。
  * @param {string} url
+ * @param {object} [loadOptions] 同 loadModel（支持 rawUrl，用于同步实例原始路径）
  */
-function switchModel(url) {
-  return loadModel(url);
+function switchModel(url, loadOptions) {
+  return loadModel(url, loadOptions);
 }
 
 /**
  * 只读运行时调试状态（供实机验证 / 排障；不改变行为）。
- * @returns {{kind:string, idle:{idleGroup:string|null, interval:number, speed:number, playCount:number}|null,
- *   reactionUntil:number, expressionIndex:number, poseIndex:number, idleAutoDisabled:boolean}}
+ * 顶层字段为活动实例的镜像；`instances` 为全部实例的逐项状态（含各自待机 playCount）。
+ * @returns {{kind:string,
+ *   idle:{idleGroup:string|null, interval:number, speed:number, playCount:number}|null,
+ *   reactionUntil:number, expressionIndex:number, poseIndex:number, idleAutoDisabled:boolean,
+ *   activeId:string|null,
+ *   instances:Array<{id:string,kind:string,active:boolean,x:number,y:number,
+ *     idle:object|null,reactionUntil:number,expressionIndex:number,poseIndex:number}>}}
  */
 function getDebugState() {
-  const mm = state.model && state.model.internalModel && state.model.internalModel.motionManager;
+  const inst = getActiveInstance();
+  const model = (inst && inst.model) || null;
+  const mm = model && model.internalModel && model.internalModel.motionManager;
+
+  const list = [];
+  for (const id of state.order) {
+    const it = state.instances.get(id);
+    if (!it) continue;
+    list.push({
+      id: it.id,
+      kind: it.kind || '未知',
+      active: state.activeId === it.id,
+      x: it.model ? (Number(it.model.x) || 0) : 0,
+      y: it.model ? (Number(it.model.y) || 0) : 0,
+      idle: it.idle ? { ...it.idle } : null,
+      reactionUntil: it.reactionUntil,
+      expressionIndex: it.exprIndex,
+      poseIndex: it.poseIndex
+    });
+  }
+
   return {
     kind: getModelKind(),
-    idle: state.idle ? { ...state.idle } : null,
-    reactionUntil: state.reactionUntil,
-    expressionIndex: state.expressionIndex,
-    poseIndex: state.poseIndex,
-    idleAutoDisabled: !!(mm && mm.groups && mm.groups.idle === IDLE_DISABLED_GROUP)
+    idle: (inst && inst.idle) ? { ...inst.idle } : null,
+    reactionUntil: inst ? inst.reactionUntil : 0,
+    expressionIndex: inst ? inst.exprIndex : -1,
+    poseIndex: inst ? inst.poseIndex : -1,
+    idleAutoDisabled: !!(mm && mm.groups && mm.groups.idle === IDLE_DISABLED_GROUP),
+    activeId: state.activeId,
+    instances: list
   };
 }
 
-/** 重新适配当前模型（窗口 resize 时调用） */
+/** 重新适配全部实例（窗口 resize 时调用） */
 function refreshFit(opts) {
-  fitToWindow(opts);
+  refreshFitAll(opts);
 }
 
-/** 卸载当前模型 */
+/** 卸载当前（活动）模型；等同于移除活动实例，不删磁盘文件 */
 function unloadModel() {
-  destroyCurrentModel();
+  if (!state.activeId) return;
+  removeInstance(state.activeId);
 }
 
 // ---------------- 命中区域：hit areas 优先，无则用「绘制内容包围盒」 ----------------
@@ -1019,9 +1549,12 @@ function collectNamesFromDefinitions(defs) {
   return null;
 }
 
-/** 当前模型可用表情名（0 基索引与 definitions / settings.expressions 顺序一致）；无则 [] */
-function getExpressionNames() {
-  const model = state.model;
+/**
+ * 取指定模型的可用表情名（0 基索引与 definitions / settings.expressions 顺序一致）；无则 []。
+ * @param {object|null} model
+ * @returns {string[]}
+ */
+function getExpressionNamesFor(model) {
   if (!model) return [];
   try {
     const internalModel = model.internalModel || {};
@@ -1042,16 +1575,23 @@ function getExpressionNames() {
   return [];
 }
 
+/** 当前（活动实例）模型可用表情名；无则 [] */
+function getExpressionNames() {
+  return getExpressionNamesFor(getActiveModel());
+}
+
 /**
- * 选择第 index 个表情（0 基）。
+ * 为指定实例选择第 index 个表情（0 基）。
+ * @param {ModelInstance|null} inst
+ * @param {number} index
  * @returns {boolean} 越界 / 无表情 / 播放失败 → false
  */
-function selectExpression(index) {
-  const model = state.model;
+function selectExpressionFor(inst, index) {
+  const model = inst && inst.model;
   if (!model) return false;
   const i = Number(index);
   if (!Number.isInteger(i) || i < 0) return false;
-  const names = getExpressionNames();
+  const names = getExpressionNamesFor(model);
   if (i >= names.length) return false;
   try {
     let ok;
@@ -1061,7 +1601,7 @@ function selectExpression(index) {
       ok = model.setExpression(names[i]);
     }
     if (isThenable(ok)) ok = true;         // 异步实现视为已下发
-    if (ok) state.expressionIndex = i;
+    if (ok) inst.exprIndex = i;
     return !!ok;
   } catch (err) {
     console.warn('[modelLoader] 选择表情失败:', err);
@@ -1069,25 +1609,38 @@ function selectExpression(index) {
   }
 }
 
-/** 轮换到下一个表情（循环）；无表情 → false */
+/**
+ * 选择活动实例的第 index 个表情（0 基）。
+ * @returns {boolean} 越界 / 无表情 / 播放失败 → false
+ */
+function selectExpression(index) {
+  return selectExpressionFor(getActiveInstance(), index);
+}
+
+/** 活动实例轮换到下一个表情（循环）；无表情 → false */
 function nextExpression() {
-  const names = getExpressionNames();
+  const inst = getActiveInstance();
+  const names = getExpressionNamesFor(inst && inst.model);
   if (!names.length) return false;
-  const next = (state.expressionIndex + 1) % names.length; // 初始 -1 → 0
-  return selectExpression(next);
+  const next = ((inst ? inst.exprIndex : -1) + 1) % names.length; // 初始 -1 → 0
+  return selectExpressionFor(inst, next);
 }
 
-/** 当前表情索引（无则 -1） */
+/** 活动实例当前表情索引（无则 -1） */
 function getExpressionIndex() {
-  if (!state.model) return -1;
-  const names = getExpressionNames();
+  const inst = getActiveInstance();
+  if (!inst || !inst.model) return -1;
+  const names = getExpressionNamesFor(inst.model);
   if (!names.length) return -1;
-  return (state.expressionIndex >= 0 && state.expressionIndex < names.length) ? state.expressionIndex : -1;
+  return (inst.exprIndex >= 0 && inst.exprIndex < names.length) ? inst.exprIndex : -1;
 }
 
-/** 以「动作组」呈现的姿势名列表（motionManager.definitions 组名）；无则 [] */
-function getPoseNames() {
-  const model = state.model;
+/**
+ * 取指定模型的「动作组」名列表（motionManager.definitions 组名）；无则 []。
+ * @param {object|null} model
+ * @returns {string[]}
+ */
+function getMotionGroupNames(model) {
   if (!model) return [];
   try {
     const manager = model.internalModel && model.internalModel.motionManager;
@@ -1100,16 +1653,23 @@ function getPoseNames() {
   return [];
 }
 
+/** 以「动作组」呈现的姿势名列表（活动实例）；无则 [] */
+function getPoseNames() {
+  return getMotionGroupNames(getActiveModel());
+}
+
 /**
- * 播放第 index 个动作组（0 基）。
+ * 为指定实例播放第 index 个动作组（0 基）。
+ * @param {ModelInstance|null} inst
+ * @param {number} index
  * @returns {boolean} 越界 / 无动作组 / 播放失败 → false
  */
-function selectPose(index) {
-  const model = state.model;
+function selectPoseFor(inst, index) {
+  const model = inst && inst.model;
   if (!model) return false;
   const i = Number(index);
   if (!Number.isInteger(i) || i < 0) return false;
-  const names = getPoseNames();
+  const names = getMotionGroupNames(model);
   if (i >= names.length) return false;
   const group = names[i];
   try {
@@ -1122,7 +1682,7 @@ function selectPose(index) {
       const r = model.motion(group);
       ok = isThenable(r) ? true : r;
     }
-    if (ok) state.poseIndex = i;
+    if (ok) inst.poseIndex = i;
     return !!ok;
   } catch (err) {
     console.warn('[modelLoader] 播放动作组失败:', err);
@@ -1130,20 +1690,30 @@ function selectPose(index) {
   }
 }
 
-/** 轮换到下一个动作组（循环）；无动作组 → false */
-function nextPose() {
-  const names = getPoseNames();
-  if (!names.length) return false;
-  const next = (state.poseIndex + 1) % names.length; // 初始 -1 → 0
-  return selectPose(next);
+/**
+ * 播放活动实例的第 index 个动作组（0 基）。
+ * @returns {boolean} 越界 / 无动作组 / 播放失败 → false
+ */
+function selectPose(index) {
+  return selectPoseFor(getActiveInstance(), index);
 }
 
-/** 当前动作组索引（无则 -1） */
+/** 活动实例轮换到下一个动作组（循环）；无动作组 → false */
+function nextPose() {
+  const inst = getActiveInstance();
+  const names = getMotionGroupNames(inst && inst.model);
+  if (!names.length) return false;
+  const next = ((inst ? inst.poseIndex : -1) + 1) % names.length; // 初始 -1 → 0
+  return selectPoseFor(inst, next);
+}
+
+/** 活动实例当前动作组索引（无则 -1） */
 function getPoseIndex() {
-  if (!state.model) return -1;
-  const names = getPoseNames();
+  const inst = getActiveInstance();
+  if (!inst || !inst.model) return -1;
+  const names = getMotionGroupNames(inst.model);
   if (!names.length) return -1;
-  return (state.poseIndex >= 0 && state.poseIndex < names.length) ? state.poseIndex : -1;
+  return (inst.poseIndex >= 0 && inst.poseIndex < names.length) ? inst.poseIndex : -1;
 }
 
 // ---------------- ② 待机降频（解决「待机动画太快、太频繁」） ----------------
@@ -1186,29 +1756,38 @@ function groupHasPlayableMotion(model, group) {
 
 /** 选取可用的 idle 动作组名：优先名字含 idle 且含有效动作文件的组；无则 null */
 function findIdleGroupName(model) {
-  const names = getPoseNames().filter((n) => /idle/i.test(String(n)));
+  const names = getMotionGroupNames(model).filter((n) => /idle/i.test(String(n)));
   for (const n of names) {
     if (groupHasPlayableMotion(model, n)) return n;
   }
   return null;
 }
 
-/** 停止待机调度（模型销毁 / 切换前调用） */
-function stopIdleScheduler() {
+/**
+ * 停止「指定实例」的待机调度（只移除该实例自己的 tick，不影响其它实例）。
+ * @param {ModelInstance} [instance] 缺省为活动实例
+ */
+function stopIdleScheduler(instance) {
+  const inst = instance || getActiveInstance();
+  if (!inst) return;
   const app = state.app;
-  if (state.idleTick && app && app.ticker && typeof app.ticker.remove === 'function') {
-    try { app.ticker.remove(state.idleTick); } catch (_) { /* 忽略 */ }
+  if (inst.idleTick && app && app.ticker && typeof app.ticker.remove === 'function') {
+    try { app.ticker.remove(inst.idleTick); } catch (_) { /* 忽略 */ }
   }
-  state.idleTick = null;
-  state.idle = null;
+  inst.idleTick = null;
+  inst.idle = null;
 }
 
 /**
- * 装配待机调度：关闭 pld 内置自动待机，改由本模块按 idleIntervalMs 驱动。
+ * 装配「指定实例」的待机调度：关闭 pld 内置自动待机，改由本模块按 idleIntervalMs 驱动。
+ * 每个实例独立 tick（新增/移除实例不得停掉其它实例的待机）。
  * @param {object} model Live2DModel
+ * @param {ModelInstance} [instance] 缺省为活动实例
  */
-function setupIdleScheduler(model) {
-  stopIdleScheduler();
+function setupIdleScheduler(model, instance) {
+  const inst = instance || getActiveInstance();
+  if (!inst) return;
+  stopIdleScheduler(inst);
   if (!model) return;
   const mm = model.internalModel && model.internalModel.motionManager;
   if (!mm) return;
@@ -1216,12 +1795,12 @@ function setupIdleScheduler(model) {
   const idleGroup = findIdleGroupName(model);
   const interval = clampIdleInterval(state.options.idleIntervalMs);
   const speed = clampIdleSpeed(state.options.idleSpeed);
-  state.idle = { idleGroup, interval, speed, playCount: 0 };
+  inst.idle = { idleGroup, interval, speed, playCount: 0 };
 
   const ticker = state.app && state.app.ticker;
   if (!idleGroup || !ticker || typeof ticker.add !== 'function') {
     console.info(
-      `[modelLoader] 待机调度未启用（idle 组=${idleGroup || '无'}；Ticker=${!!ticker}）：` +
+      `[modelLoader] 待机调度未启用（实例 ${inst.id}；idle 组=${idleGroup || '无'}；Ticker=${!!ticker}）：` +
       '该模型无可播 idle 动作，保持现有行为'
     );
     return;
@@ -1233,8 +1812,8 @@ function setupIdleScheduler(model) {
   let lastAt = null; // null = 尚未起算（从加载完成起计时，避免加载后立即播放）
   const step = () => {
     const now = perfNow();
-    // 点击反应进行中：让位并顺延计时
-    if (now < state.reactionUntil) { lastAt = now; return; }
+    // 点击反应进行中：让位并顺延计时（只读该实例自己的反应锁）
+    if (now < inst.reactionUntil) { lastAt = now; return; }
     // 有动作正在播放（含交互动作）：让位并顺延计时（不与其他动作抢占）
     if (mm.playing === true) { lastAt = now; return; }
     if (lastAt == null) { lastAt = now; return; }
@@ -1243,14 +1822,14 @@ function setupIdleScheduler(model) {
     try {
       const started = mm.startRandomMotion(idleGroup, 1); // MotionPriority.IDLE = 1（不会抢占 NORMAL）
       if (isThenable(started) && typeof started.catch === 'function') started.catch(() => { /* 静默 */ });
-      state.idle.playCount += 1;
+      if (inst.idle) inst.idle.playCount += 1;
     } catch (_) { /* 忽略 */ }
   };
   ticker.add(step);
-  state.idleTick = step;
+  inst.idleTick = step;
 
   console.info(
-    `[modelLoader] 待机降频：组=${idleGroup}，间隔=${interval}ms，目标速度=${speed}` +
+    `[modelLoader] 待机降频：实例 ${inst.id}，组=${idleGroup}，间隔=${interval}ms，目标速度=${speed}` +
     '（本构建无 motion speed API，速度仅记录；实际由「播一次→等待间隔→再播」控制频率）'
   );
 }
@@ -1413,7 +1992,7 @@ function normalizeGroupName(name) {
  * @returns {string|null}
  */
 function findMotionGroupName(model, candidates) {
-  const groups = getPoseNames();
+  const groups = getMotionGroupNames(model);
   if (!groups.length) return null;
   const normalized = groups.map((g) => ({ group: g, key: normalizeGroupName(g) }));
 
@@ -1465,11 +2044,12 @@ async function playVisibleMotion(model) {
 
 /**
  * 挑选一个「非中性、非贴图类」的随机表情索引（无可用时退回任意非 0 索引）。
+ * @param {object} model 目标模型
  * @param {number} [excludeIndex=-1] 需排除的索引（避免连点重复同一表情）
  * @returns {number} -1 = 无表情
  */
-function pickRandomExpressionIndex(excludeIndex = -1) {
-  const names = getExpressionNames();
+function pickRandomExpressionIndex(model, excludeIndex = -1) {
+  const names = getExpressionNamesFor(model);
   if (!names.length) return -1;
   const pool = [];
   names.forEach((name, i) => {
@@ -1491,23 +2071,29 @@ function pickRandomExpressionIndex(excludeIndex = -1) {
 
 /**
  * 播放一个随机「可见」表情（含扫描发现的 exp3）。
- * 下发即视为已反应、异步失败静默；避免与上一次反应播放同一索引。
+ * 下发即视为已反应、异步失败静默；避免与上一次反应播放同一索引（按实例记录）。
+ * @param {object} model 目标模型
+ * @param {ModelInstance} [instance] 目标实例（缺省为活动实例）
  * @returns {boolean}
  */
-function playVisibleExpression(model) {
-  const idx = pickRandomExpressionIndex(state.lastPlayedExpr);
+function playVisibleExpression(model, instance) {
+  const inst = instance || getActiveInstance();
+  const lastPlayed = inst ? inst.lastPlayedExpr : -1;
+  const idx = pickRandomExpressionIndex(model, lastPlayed);
   if (idx < 0) return false;
   try {
     let ok;
     if (typeof model.expression === 'function') ok = model.expression(idx);
-    else if (typeof model.setExpression === 'function') ok = model.setExpression(getExpressionNames()[idx]);
+    else if (typeof model.setExpression === 'function') ok = model.setExpression(getExpressionNamesFor(model)[idx]);
     if (isThenable(ok)) {
       if (typeof ok.catch === 'function') ok.catch(() => { /* 加载失败静默 */ });
       ok = true;
     }
     if (!ok) return false;
-    state.expressionIndex = idx;
-    state.lastPlayedExpr = idx;
+    if (inst) {
+      inst.exprIndex = idx;
+      inst.lastPlayedExpr = idx;
+    }
     return true;
   } catch (_) {
     return false;
@@ -1631,22 +2217,29 @@ function playScaleBounce(model) {
  *   3) 非嘴部参数反应（眼笑 / 脸颊 / 身体小幅摆动）——无表情无动作模型的可见保证；
  *   4) 缩放脉冲兜底（不依赖任何核心参数）。
  *
- * 重入保护：以 state.reactionUntil 为锁，反应进行中忽略新的点击（快速连点只触发一次），
- * 保证「不会残留张嘴、双击也能正确收尾」。全程 try/catch，不阻断眨眼/视线/待机。
+ * 多实例：作用于指定实例（缺省为活动实例），重入锁与状态按实例隔离
+ * （返回 true 表示「已在反应中」或已下发反应）。全程 try/catch，不阻断眨眼/视线/待机。
  *
- * @returns {Promise<boolean>}
+ * @param {string} [instanceId] 目标实例 id；缺省 → 活动实例
+ * @returns {Promise<boolean>} 实例不存在 → false
  */
-async function reactTap() {
-  const model = state.model;
-  if (!model) return false;
+async function reactTap(instanceId) {
+  let inst;
+  if (instanceId === undefined || instanceId === null || instanceId === '') {
+    inst = getActiveInstance();
+  } else {
+    inst = state.instances.get(normalizeInstanceId(instanceId)) || null;
+  }
+  if (!inst || !inst.model) return false;
+  const model = inst.model;
 
   // 重入保护：反应进行中忽略新的点击（返回 true 表示「已在反应中」）
   const now = perfNow();
-  if (now < state.reactionUntil) return true;
-  state.reactionUntil = now + REACTION_LOCK_MS;
+  if (now < inst.reactionUntil) return true;
+  inst.reactionUntil = now + REACTION_LOCK_MS;
 
   // 1) 可见表情（含扫描发现的 exp3）
-  try { if (playVisibleExpression(model)) return true; } catch (_) { /* 忽略 */ }
+  try { if (playVisibleExpression(model, inst)) return true; } catch (_) { /* 忽略 */ }
 
   // 2) 可见动作组（动态、可靠可见）
   try { if (await playVisibleMotion(model)) return true; } catch (_) { /* 忽略 */ }
@@ -1687,7 +2280,19 @@ export {
   getContentBounds,
   modelHasHitAreas,
   suppressBodySway,
-  reactTap
+  reactTap,
+  addInstance,
+  getInstances,
+  getInstance,
+  setActiveInstance,
+  getActiveInstanceId,
+  removeInstance,
+  setInstancePosition,
+  setInstanceRawUrl,
+  getInstancePosition,
+  fitInstance,
+  refreshFitAll,
+  unloadAll
 };
 
 export default {
@@ -1717,5 +2322,17 @@ export default {
   getContentBounds,
   modelHasHitAreas,
   suppressBodySway,
-  reactTap
+  reactTap,
+  addInstance,
+  getInstances,
+  getInstance,
+  setActiveInstance,
+  getActiveInstanceId,
+  removeInstance,
+  setInstancePosition,
+  setInstanceRawUrl,
+  getInstancePosition,
+  fitInstance,
+  refreshFitAll,
+  unloadAll
 };

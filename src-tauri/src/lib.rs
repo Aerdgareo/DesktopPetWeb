@@ -20,6 +20,7 @@
 //! 逻辑简单、跨平台且可回退。限制详见 `tauri/README.md`。
 
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -318,21 +319,41 @@ fn remove_root(roots: &mut Vec<ExternalDir>, key: &str) -> bool {
     false
 }
 
-/// 读取外部地址列表（文件缺失 / 损坏 → 空列表，绝不抛错）。
-fn load_external_roots(app: &AppHandle) -> Vec<ExternalDir> {
+/// 读取完整配置文档（`config.json`）。
+///
+/// 契约（`C-CONFIG@1`）：文件缺失 / 无法读取 / JSON 解析失败 / 顶层不是对象时，
+/// 统一返回空对象 `{}`，**绝不 panic、绝不向调用者抛错**。
+/// 其它未知键原样保留，供向前兼容使用。
+fn load_config_doc(app: &AppHandle) -> JsonValue {
     let path = match config_path(app) {
         Ok(p) => p,
-        Err(_) => return Vec::new(),
+        Err(_) => return JsonValue::Object(serde_json::Map::new()),
     };
     let raw = match fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(_) => return JsonValue::Object(serde_json::Map::new()),
     };
-    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let arr = parsed
+    match serde_json::from_str::<JsonValue>(&raw) {
+        Ok(v) if v.is_object() => v,
+        // 损坏 / 顶层非对象：视为空配置（不覆盖用户其它键的前提是下次写入合并）
+        _ => JsonValue::Object(serde_json::Map::new()),
+    }
+}
+
+/// 写回完整配置文档（read-modify-write 的落点）：确保父目录存在，pretty 化写出。
+fn save_config_doc(app: &AppHandle, doc: &JsonValue) -> Result<(), String> {
+    let path = config_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
+    fs::write(&path, text).map_err(|e| format!("写入配置失败: {e}"))
+}
+
+/// 读取外部地址列表（RMW 读取；文件缺失 / 损坏 → 空列表，绝不抛错）。
+fn load_external_roots(app: &AppHandle) -> Vec<ExternalDir> {
+    let doc = load_config_doc(app);
+    let arr = doc
         .get("externalModels")
         .and_then(|v| v.as_array())
         .cloned()
@@ -355,19 +376,61 @@ fn load_external_roots(app: &AppHandle) -> Vec<ExternalDir> {
     normalize_roots(items)
 }
 
-/// 写回外部地址列表（确保目录存在；失败返回 Err，由命令转成结构化错误）。
+/// 写回外部地址列表（RMW：仅替换 `externalModels`，其余键（含 `importRoot`）原样保留）。
 fn save_external_roots(app: &AppHandle, roots: &[ExternalDir]) -> Result<(), String> {
-    let path = config_path(app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
+    let mut doc = load_config_doc(app);
+    if !doc.is_object() {
+        doc = JsonValue::Object(serde_json::Map::new());
     }
-    let list: Vec<serde_json::Value> = roots
+    let list: Vec<JsonValue> = roots
         .iter()
         .map(|r| serde_json::json!({ "id": r.id, "path": r.path }))
         .collect();
-    let doc = serde_json::json!({ "externalModels": list });
-    let text = serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化配置失败: {e}"))?;
-    fs::write(&path, text).map_err(|e| format!("写入配置失败: {e}"))
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert("externalModels".to_string(), JsonValue::Array(list));
+    }
+    save_config_doc(app, &doc)
+}
+
+/// 读取导入根目录（`config.json` 的 `importRoot`）。
+///
+/// 空串 / 缺失 / 非字符串 / 仅空白 → `None`（统一表示「未设置」，落点回退 exe 同级 `models/`）。
+/// 返回值为 [`normalize_root_path`] 归一化后的绝对路径；不校验目录是否仍然存在。
+fn read_import_root(app: &AppHandle) -> Option<String> {
+    let doc = load_config_doc(app);
+    let raw = doc
+        .get("importRoot")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let normalized = normalize_root_path(raw);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+/// 写入导入根目录（RMW：仅替换 `importRoot`，`externalModels` 与未知键原样保留）。
+///
+/// `None` / 归一化后为空 → 存为 `null`（语义：恢复默认落点）。
+/// 返回实际写入的归一化值；写入失败返回 `Err` 且磁盘配置保持原样。
+fn write_import_root(app: &AppHandle, value: Option<&str>) -> Result<Option<String>, String> {
+    let mut doc = load_config_doc(app);
+    if !doc.is_object() {
+        doc = JsonValue::Object(serde_json::Map::new());
+    }
+    let normalized = value
+        .map(normalize_root_path)
+        .filter(|s| !s.is_empty());
+    let payload = match &normalized {
+        Some(p) => JsonValue::String(p.clone()),
+        None => JsonValue::Null,
+    };
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert("importRoot".to_string(), payload);
+    }
+    save_config_doc(app, &doc)?;
+    Ok(normalized)
 }
 
 /// 依据入口文件名判定 Live2D 运行时版本。
@@ -424,7 +487,9 @@ fn scan_models_in_root(root: &Path, source: &str) -> Vec<ModelEntry> {
             let abs = dir.join(&file_name);
             out.push(ModelEntry {
                 id: dir_name.clone(),
-                name: dir_name,
+                // 显示层净化：去 Cubism 型号 / 尾部分版本号，但保留 ` (n)` 冲突序号；
+                // 磁盘目录名（id）与 url 不变，历史目录不改名。
+                name: derive_display_name(&dir_name),
                 url: abs.to_string_lossy().to_string(),
                 model_type: kind,
                 source: source.to_string(),
@@ -482,6 +547,55 @@ fn clear_external_models_dirs(app: AppHandle) -> bool {
     save_external_roots(&app, &[]).is_ok()
 }
 
+// ---------------------------------------------------------------------------
+// 导入根目录（`config.json` 的 importRoot，契约 C-IMPORT-ROOT@1）
+// ---------------------------------------------------------------------------
+
+/// 读取当前导入根目录。前端 `invoke('get_import_root')`。
+///
+/// 返回 `null` 表示未设置（导入落点回退到 exe 同级 `models/`）。
+/// 不校验目录是否仍然存在：删除目录后仍能读到值，由导入时报错。
+#[tauri::command]
+fn get_import_root(app: AppHandle) -> Option<String> {
+    read_import_root(&app)
+}
+
+/// 选择「模型导入根目录」：弹原生目录选择器 → 持久化到 `config.json.importRoot`。
+/// 前端 `invoke('pick_import_root')`。
+///
+/// * 取消（用户未选）→ 返回当前值，不写配置、不报错；
+/// * 写入失败 → `Err("保存导入根目录失败: <e>")`，磁盘配置保持原样。
+///
+/// 关键：传入 `window` 并经 [`set_parent`] 指定父窗口，否则在「置顶 + 无边框 + 全屏透明」
+/// 的桌宠窗口下对话框会被遮挡 / 失焦（同 [`pick_external_models_dir`]）。
+#[tauri::command]
+async fn pick_import_root(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> Result<Option<String>, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("选择模型导入根目录")
+        .blocking_pick_folder();
+    match picked {
+        Some(fp) => write_import_root(&app, Some(&fp.to_string()))
+            .map_err(|e| format!("保存导入根目录失败: {e}")),
+        // 取消：不写配置，返回当前值（前端据此保持显示不变）
+        None => Ok(read_import_root(&app)),
+    }
+}
+
+/// 清空导入根目录（恢复默认落点 `<exe_dir>/models`）。
+/// 前端 `invoke('clear_import_root')`；成功恒返回 `null`。
+///
+/// 只清配置，**不删除、不迁移**任何已存在的模型目录。
+#[tauri::command]
+fn clear_import_root(app: AppHandle) -> Result<Option<String>, String> {
+    write_import_root(&app, None)
+}
+
 /// 读取模型清单：扫描「程序 models/（导入落点）」＋「全部外部模型根」。
 /// 内置 models/（随前端分发）清单由前端读 models.json 合并，不在此处扫描。
 /// 前端 `invoke('get_model_list')`，返回 [{ id, name, url, type, source }]。
@@ -490,7 +604,7 @@ fn get_model_list(app: AppHandle) -> Vec<ModelEntry> {
     let mut out: Vec<ModelEntry> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // 1) 程序目录（exe 同级 models/）：导入落点；source='imported'（前端据此显示「删除」）
+    // 1) 程序目录（exe 同级 models/）：默认导入落点；source='imported'（前端据此显示「删除」）
     if let Ok(dir) = exe_models_dir() {
         for m in scan_models_in_root(&dir, "imported") {
             if seen.insert(m.url.clone()) {
@@ -499,7 +613,17 @@ fn get_model_list(app: AppHandle) -> Vec<ModelEntry> {
         }
     }
 
-    // 2) 已引用的外部模型文件夹（多根）：source='external'
+    // 2) 导入根目录（用户设置的全局导入落点）：语义同为「已导入」，可删除；
+    //    若与程序 models/ 是同一目录，靠 url 去重避免重复条目。
+    if let Some(root) = read_import_root(&app) {
+        for m in scan_models_in_root(Path::new(&root), "imported") {
+            if seen.insert(m.url.clone()) {
+                out.push(m);
+            }
+        }
+    }
+
+    // 3) 已引用的外部模型文件夹（多根）：source='external'（不可删除）
     for root in load_external_roots(&app) {
         if root.path.trim().is_empty() {
             continue;
@@ -515,13 +639,17 @@ fn get_model_list(app: AppHandle) -> Vec<ModelEntry> {
 }
 
 // ---------------------------------------------------------------------------
-// 程序目录模型（exe 同级 models/）：导入 / 删除
+// 模型库：导入 / 删除（契约 C-MODEL-NAMING@1）
 // ---------------------------------------------------------------------------
 //
-// 单 exe「绿色版」约定：程序目录 = **可执行文件同级**，模型库为其下的 `models/`。
-//   * 导入：把选中的模型目录递归复制到 `<exe_dir>/models/<模型名>/`（同名覆盖、幂等）；
-//   * 列表：`get_model_list` 扫描该目录（source='imported'）→ 导入后立即出现在列表；
-//   * 删除：删除 `<exe_dir>/models/<模型名>/`（或外部根内的模型目录），带安全边界校验。
+// 单 exe「绿色版」约定：模型库根 = `importRoot`（用户在设置面板配置的全局导入根目录）；
+// 未设置时回退为**可执行文件同级**的 `models/`。
+//   * 导入：把选中的模型目录递归复制到 `<模型库根>/<基本模型名>/`；
+//     基本模型名去版本号/型号后缀；同名但来源不同则新建 `<基本名> (2)`…（**不覆盖、不删除**）；
+//     重复导入同一源目录则幂等复用；
+//   * 列表：`get_model_list` 扫描「exe models/ → importRoot → 各外部根」（source='imported'/'external'，
+//     按 url 去重）→ 导入后立即出现在列表；
+//   * 删除：删除模型库根（或外部根）内的模型目录，带安全边界校验。
 
 /// 程序目录（exe 同级）的 models 目录：`<exe_dir>/models`。
 fn exe_models_dir() -> Result<PathBuf, String> {
@@ -568,6 +696,153 @@ fn sanitize_model_name(name: &str) -> String {
     s
 }
 
+/// 模型名允许的最大字符数（含同名序号后缀，见 [`resolve_import_target_dir`]）。
+const MAX_MODEL_NAME_LEN: usize = 44;
+
+/// Windows 资源管理器「复制」产生的同名序号后缀允许的最大位数（`(1)`…`(999)`）。
+const COPY_SUFFIX_MAX_DIGITS: usize = 3;
+
+/// 判断尾部片段是否是 Cubism 型号标记（大小写不敏感）：
+/// `cubism2` / `cubism3` / `cubism4` / `cubism5`。
+fn is_cubism_marker(seg: &str) -> bool {
+    matches!(
+        seg.to_lowercase().as_str(),
+        "cubism2" | "cubism3" | "cubism4" | "cubism5"
+    )
+}
+
+/// 判断尾部片段是否是版本号：可选 `v`/`V` 前缀 + 数字 + 可选 `.数字` 重复。
+///
+/// 例：`2`、`03`、`v2`、`V1.0`、`1.2.3` 均匹配；`t03`（字母+数字）、`v`、`1.` 不匹配。
+fn is_version_segment(seg: &str) -> bool {
+    let body = seg
+        .strip_prefix('v')
+        .or_else(|| seg.strip_prefix('V'))
+        .unwrap_or(seg);
+    if body.is_empty() {
+        return false;
+    }
+    let mut parts = body.split('.');
+    let first = parts.next().unwrap_or_default();
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if !digits(first) {
+        return false;
+    }
+    parts.all(digits)
+}
+
+/// 循环移除「尾部分隔符 + 符合 predicate 的片段」。
+///
+/// 分隔符固定为 `-` / `_` / 空格（净化后空格通常已变成 `-`，保留空格以兼容磁盘既有目录名）。
+/// 仅当片段非空且 `predicate(片段)` 为真时才截断，因此 `haru_greeter_t03` 的 `t03` 不会被误伤。
+fn strip_tail_segments<F>(name: &str, predicate: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    let mut cur = name.to_string();
+    loop {
+        let trimmed = cur.trim_end_matches(|c| c == '.' || c == ' ');
+        if trimmed.len() != cur.len() {
+            cur = trimmed.to_string();
+        }
+        let Some(pos) = cur.rfind(|c: char| matches!(c, '-' | '_' | ' ')) else {
+            break;
+        };
+        let seg = &cur[pos + 1..];
+        if !seg.is_empty() && predicate(seg) {
+            cur.truncate(pos);
+            continue;
+        }
+        break;
+    }
+    cur
+}
+
+/// 移除尾部的 Windows「复制」后缀：` (1)` / `(2)` / `（2）`，允许前面有 `-` / `_` / 空格。
+///
+/// 注意：入参通常已过 [`sanitize_model_name`]，其中的空格已被压缩成 `-`，
+/// 因此 `foo (1)` 实际以 `foo-(1)` 形式出现，需同时兼容 `foo(1)` 写法。
+fn strip_copy_suffix(name: &str) -> String {
+    let mut cur = name.trim_end_matches(|c| c == '.' || c == ' ').to_string();
+    loop {
+        let mut stripped: Option<String> = None;
+        for (open, close) in [('(', ')'), ('（', '）')] {
+            if !cur.ends_with(close) {
+                continue;
+            }
+            let Some(idx) = cur.rfind(open) else {
+                continue;
+            };
+            let inner = &cur[idx + open.len_utf8()..cur.len() - close.len_utf8()];
+            let is_copy_index = !inner.is_empty()
+                && inner.len() <= COPY_SUFFIX_MAX_DIGITS
+                && inner.chars().all(|c| c.is_ascii_digit());
+            if !is_copy_index {
+                continue;
+            }
+            let head = cur[..idx].trim_end_matches(|c| c == '-' || c == '_' || c == ' ');
+            if !head.is_empty() {
+                stripped = Some(head.to_string());
+                break;
+            }
+        }
+        match stripped {
+            Some(s) => cur = s,
+            None => break,
+        }
+    }
+    cur
+}
+
+/// 导入目标目录名（`C-MODEL-NAMING@1`）：在 [`sanitize_model_name`] 基础上继续去除
+/// 尾部 Cubism 型号、Windows 复制后缀与版本号；空 → `model`。
+///
+/// 验收例：`lafei_4`→`lafei`、`aierdeliqi_5`→`aierdeliqi`、`肥牛-cubism4`→`肥牛`、
+/// `x-v1.2`→`x`、`foo (1)`→`foo`；`haru_greeter_t03` 保持不变（不误伤）。
+fn derive_base_model_name(raw: &str) -> String {
+    let mut cur = sanitize_model_name(raw);
+    for _ in 0..8 {
+        let before = cur.clone();
+        cur = strip_copy_suffix(&cur);
+        cur = strip_tail_segments(&cur, is_cubism_marker);
+        cur = strip_tail_segments(&cur, is_version_segment);
+        cur = cur.trim_matches(|c| c == '.' || c == ' ').to_string();
+        if cur.is_empty() {
+            cur = "model".to_string();
+        }
+        if cur == before {
+            break;
+        }
+    }
+    if cur.is_empty() {
+        "model".to_string()
+    } else {
+        cur
+    }
+}
+
+/// 列表显示名（`C-MODEL-NAMING@1`）：仅去 Cubism 型号与尾部分版本号，
+/// **保留** ` (n)` 冲突序号（用于区分同名的多个副本）。
+///
+/// 输入为磁盘目录名原样（不做 sanitize），因此 `lafei (2)` 保持为 `lafei (2)`。
+fn derive_display_name(dir_name: &str) -> String {
+    let mut cur = dir_name.trim().to_string();
+    for _ in 0..8 {
+        let before = cur.clone();
+        cur = strip_tail_segments(&cur, is_cubism_marker);
+        cur = strip_tail_segments(&cur, is_version_segment);
+        cur = cur.trim_matches(|c| c == '.' || c == ' ').to_string();
+        if cur == before {
+            break;
+        }
+    }
+    if cur.is_empty() {
+        "model".to_string()
+    } else {
+        cur
+    }
+}
+
 /// 判断字符串是否更像「磁盘路径」而非「模型 id」（含路径分隔符或为绝对路径）。
 fn looks_like_path(s: &str) -> bool {
     s.contains('\\') || s.contains('/') || Path::new(s).is_absolute()
@@ -579,6 +854,67 @@ fn is_within(child: &Path, parent: &Path) -> bool {
         (Ok(c), Ok(p)) => c.starts_with(&p),
         _ => false,
     }
+}
+
+/// 判断两个路径是否指向同一物理目录（无法规范化时退化为大小写不敏感的字符串比较）。
+fn dirs_equal(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase(),
+    }
+}
+
+/// 选择实际落点目录（`C-MODEL-NAMING@1`）：**不覆盖、不删除**既有目录。
+///
+/// * `root` —— 目标根（`importRoot` 或 exe 同级 `models/`）；
+/// * `src`  —— 本次导入的源模型目录（已定位）；
+/// * `base` —— [`derive_base_model_name`] 的结果。
+///
+/// 决策（与计划 2.2.3 决策表一致）：
+/// 1. `root/base` 不存在 → `(root/base, base)`；
+/// 2. 存在且与 `src` 是同一物理目录 → `(root/base, base)`（幂等复用，调用方不得复制/删除）；
+/// 3. 存在但来源不同 → 取 `"base (2)"` … `"base (99)"` 中第一个不存在者；
+/// 4. 全部占用 → `Err`；加序号前先把 `base` 截断到 44 字符上限内。
+fn resolve_import_target_dir(
+    root: &Path,
+    src: &Path,
+    base: &str,
+) -> Result<(PathBuf, String), String> {
+    let base = if base.trim().is_empty() { "model" } else { base.trim() };
+    let direct = root.join(base);
+    if !direct.exists() {
+        return Ok((direct, base.to_string()));
+    }
+    if dirs_equal(src, &direct) {
+        return Ok((direct, base.to_string()));
+    }
+
+    // 保证 `base (nn)` 总长不超过 MAX_MODEL_NAME_LEN（Windows 可用性）
+    let suffix_budget = " (99)".chars().count();
+    let max_base_len = MAX_MODEL_NAME_LEN.saturating_sub(suffix_budget);
+    let truncated: String = if base.chars().count() > max_base_len {
+        base.chars()
+            .take(max_base_len)
+            .collect::<String>()
+            .trim_end_matches(|c| c == '.' || c == ' ' || c == '-' || c == '_')
+            .to_string()
+    } else {
+        base.to_string()
+    };
+    let truncated = if truncated.is_empty() {
+        "model".to_string()
+    } else {
+        truncated
+    };
+
+    for n in 2..=99u32 {
+        let cand_name = format!("{truncated} ({n})");
+        let cand = root.join(&cand_name);
+        if !cand.exists() {
+            return Ok((cand, cand_name));
+        }
+    }
+    Err("同名模型过多（已存在 base (2)…(99)）".to_string())
 }
 
 /// 从「入口文件」或「模型目录」解析出模型目录（含一级 .model3.json / .model.json）。
@@ -606,8 +942,10 @@ fn locate_model_dir(p: &Path) -> Result<(PathBuf, String, String), String> {
     Err("所选路径不存在".to_string())
 }
 
-/// 导入模型：弹原生选择器 → 定位模型目录 → 递归复制到
-/// `<exe_dir>/models/<模型名>/`（同名覆盖、幂等）→ 返回模型条目。
+/// 导入模型：弹原生选择器 → 定位模型目录 → 按「基本模型名 + 同名不覆盖」复制到
+/// `<模型库根>/<实际目录名>/` → 返回模型条目。
+///
+/// 模型库根 = `config.json` 的 `importRoot`；未设置时回退 `<exe_dir>/models`。
 ///
 /// 前端 `invoke('import_model')`；用户取消返回 None。
 /// 选择方式：优先「选文件夹」；若取消，再弹出「选入口文件」（Tauri 对话框无法同时选文件 / 文件夹）。
@@ -642,48 +980,52 @@ async fn import_model(
 
     let (src_dir, entry_file, model_type) = locate_model_dir(&selected)?;
 
-    // 目标：<exe_dir>/models/<模型名>；同名覆盖（先删旧目录再复制，保证幂等）
+    // 基本模型名：源目录名去 Cubism 型号 / Windows 复制后缀 / 尾部分版本号
     let dir_name = src_dir
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("model")
         .to_string();
-    let folder = sanitize_model_name(&dir_name);
-    let models_root = exe_models_dir()?;
-    fs::create_dir_all(&models_root).map_err(|e| format!("创建模型目录失败: {e}"))?;
-    let dest = models_root.join(&folder);
+    let base = derive_base_model_name(&dir_name);
 
-    // 防御：源目录即目标目录（重复导入自身）→ 直接返回现有条目，不做破坏性删除
-    if src_dir == dest {
+    // 目标根：importRoot ?? <exe_dir>/models
+    let models_root = match read_import_root(&app) {
+        Some(p) => PathBuf::from(p),
+        None => exe_models_dir()?,
+    };
+    fs::create_dir_all(&models_root).map_err(|e| format!("创建模型目录失败: {e}"))?;
+
+    // 落点决策：不存在 → base；同一物理目录 → 幂等复用；来源不同 → base (2)…(99)
+    let (dest, actual_name) = resolve_import_target_dir(&models_root, &src_dir, &base)?;
+
+    // 幂等：源目录即目标目录（重复导入自身）→ 直接返回现有条目，不复制、不删除
+    if dirs_equal(&src_dir, &dest) {
         let abs = dest.join(&entry_file);
         return Ok(Some(ModelEntry {
-            id: folder.clone(),
-            name: dir_name,
+            id: actual_name.clone(),
+            name: derive_display_name(&actual_name),
             url: abs.to_string_lossy().to_string(),
             model_type,
             source: "imported".to_string(),
         }));
     }
 
-    if dest.exists() {
-        fs::remove_dir_all(&dest).map_err(|e| format!("清理同名模型目录失败: {e}"))?;
-    }
     copy_dir_all(&src_dir, &dest).map_err(|e| format!("复制模型失败: {e}"))?;
 
     let abs_entry = dest.join(&entry_file);
     Ok(Some(ModelEntry {
-        id: folder.clone(),
-        name: dir_name,
+        id: actual_name.clone(),
+        name: derive_display_name(&actual_name),
         url: abs_entry.to_string_lossy().to_string(),
         model_type,
         source: "imported".to_string(),
     }))
 }
 
-/// 删除模型：删除 `<exe_dir>/models/<模型名>/`（或外部根内的模型目录）。
+/// 删除模型：删除模型库根（exe `models/` 或 importRoot）或外部根内的模型目录。
 ///
 /// 入参 `idOrPath` 可为模型 **id（目录名）** 或模型 **入口文件的绝对路径**（前端优先传 url）。
-/// 安全：仅允许删除「程序 models/ 之下」或「已引用外部根之下」的目录；越界返回错误。
+/// 安全：白名单 = 「程序 models/ 之下」∪「importRoot 之下」∪「已引用外部根之下」；越界返回错误。
 /// 前端 `invoke('delete_model', { idOrPath })`；目标已不存在时返回 Ok(false)（幂等）。
 #[tauri::command]
 fn delete_model(app: AppHandle, id_or_path: String) -> Result<bool, String> {
@@ -691,6 +1033,9 @@ fn delete_model(app: AppHandle, id_or_path: String) -> Result<bool, String> {
     if key.is_empty() {
         return Err("缺少模型标识".to_string());
     }
+
+    let exe_models = exe_models_dir()?;
+    let import_root = read_import_root(&app).map(PathBuf::from);
 
     // 1) 解析目标模型目录
     let target = if looks_like_path(key) {
@@ -703,22 +1048,33 @@ fn delete_model(app: AppHandle, id_or_path: String) -> Result<bool, String> {
             p.to_path_buf()
         }
     } else {
-        exe_models_dir()?.join(key)
+        // 仅给目录名：优先程序 models/，其次 importRoot（两者都可能存在同名目录）
+        let in_exe = exe_models.join(key);
+        match import_root.as_ref().map(|r| r.join(key)) {
+            Some(in_root) if !in_exe.exists() && in_root.exists() => in_root,
+            _ => in_exe,
+        }
     };
 
     if !target.exists() {
         return Ok(false); // 已不存在：视为已完成（幂等）
     }
 
-    // 2) 安全校验：仅可删除程序 models/ 或任一已引用外部根之下的目录
-    let exe_models = exe_models_dir()?;
+    // 2) 安全校验：仅可删除程序 models/、importRoot 或任一已引用外部根之下的目录
     let roots = load_external_roots(&app);
     let allowed = is_within(&target, &exe_models)
+        || import_root
+            .as_ref()
+            .map(|r| is_within(&target, r))
+            .unwrap_or(false)
         || roots
             .iter()
             .any(|r| !r.path.is_empty() && is_within(&target, Path::new(&r.path)));
     if !allowed {
-        return Err("不允许删除该目录（仅可删除程序 models/ 或已引用外部文件夹内的模型）".to_string());
+        return Err(
+            "不允许删除该目录（仅可删除程序 models/、导入根目录或已引用外部文件夹内的模型）"
+                .to_string(),
+        );
     }
 
     // 3) 删除目录（被占用 / 失败时返回错误，由前端提示）
@@ -851,10 +1207,179 @@ pub fn run() {
             remove_external_models_dir,
             clear_external_models_dirs,
             get_model_list,
-            // 导入 / 删除程序目录模型（exe 同级 models/）
+            // 导入根目录（config.json 的 importRoot）
+            get_import_root,
+            pick_import_root,
+            clear_import_root,
+            // 导入 / 删除模型（模型库根 = importRoot ?? exe 同级 models/）
             import_model,
             delete_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running DesktopPet (Tauri) application");
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试：仅覆盖纯函数（命名净化 / 落点决策），不触碰 Tauri 运行时
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 每个测试独占一个临时目录；Drop 时递归清理。
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        /// 创建 `<系统临时目录>/desktop-pet-ut-<tag>-<pid>-<序号>-<时间戳>`。
+        fn new(tag: &str) -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "desktop-pet-ut-{tag}-{}-{n}-{stamp}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&p).expect("创建临时测试目录失败");
+            TempDir(p)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // ---- derive_base_model_name：计划 acceptance ② ----
+
+    #[test]
+    fn base_name_strips_version_copy_suffix_and_cubism_marker() {
+        assert_eq!(derive_base_model_name("lafei_4"), "lafei");
+        assert_eq!(derive_base_model_name("aierdeliqi_5"), "aierdeliqi");
+        assert_eq!(derive_base_model_name("肥牛-cubism4"), "肥牛");
+        assert_eq!(derive_base_model_name("x-v1.2"), "x");
+        assert_eq!(derive_base_model_name("foo (1)"), "foo");
+        assert_eq!(derive_base_model_name("foo (2)"), "foo");
+        // 多段尾部成分需循环剥离：先去复制后缀 → 去型号 → 去版本号
+        assert_eq!(derive_base_model_name("lafei_4 (1)"), "lafei");
+        assert_eq!(derive_base_model_name("初心_1.0-cubism4"), "初心");
+        // 空 / 纯空白 → model
+        assert_eq!(derive_base_model_name(""), "model");
+        assert_eq!(derive_base_model_name("   "), "model");
+    }
+
+    #[test]
+    fn base_name_keeps_letter_digit_tail() {
+        // 反向用例：`t03` 是字母+数字，不是版本号，不得误伤
+        assert_eq!(
+            derive_base_model_name("haru_greeter_t03"),
+            "haru_greeter_t03"
+        );
+    }
+
+    // ---- derive_display_name：计划 acceptance ③ ----
+
+    #[test]
+    fn display_name_keeps_copy_suffix_but_strips_version_marker() {
+        assert_eq!(derive_display_name("lafei (2)"), "lafei (2)");
+        assert_eq!(derive_display_name("lafei (1)"), "lafei (1)");
+        assert_eq!(derive_display_name("lafei_4"), "lafei");
+        assert_eq!(derive_display_name("肥牛-cubism4"), "肥牛");
+        assert_eq!(derive_display_name("haru_greeter_t03"), "haru_greeter_t03");
+        assert_eq!(derive_display_name(""), "model");
+    }
+
+    // ---- resolve_import_target_dir：计划 acceptance ④ ----
+
+    #[test]
+    fn target_is_base_when_absent() {
+        let tmp = TempDir::new("target-absent");
+        let root = tmp.path().join("models");
+        let src = tmp.path().join("downloads").join("lafei_4");
+        fs::create_dir_all(&src).expect("创建源目录失败");
+        fs::write(src.join("lafei_4.model3.json"), "{}").expect("写入入口文件失败");
+
+        let (dest, name) = resolve_import_target_dir(&root, &src, "lafei").expect("落点决策失败");
+        assert_eq!(name, "lafei");
+        assert_eq!(dest, root.join("lafei"));
+        assert!(!dest.exists(), "不存在的落点不应被创建（由调用方复制时创建）");
+    }
+
+    #[test]
+    fn target_is_idempotent_when_src_equals_dest() {
+        let tmp = TempDir::new("target-same");
+        let root = tmp.path().join("models");
+        let target = root.join("lafei");
+        fs::create_dir_all(&target).expect("创建目标目录失败");
+        fs::write(target.join("keep.txt"), "keep").expect("写入哨兵文件失败");
+
+        let (dest, name) =
+            resolve_import_target_dir(&root, &target, "lafei").expect("落点决策失败");
+        assert_eq!(name, "lafei");
+        assert_eq!(dest, target);
+        // 幂等复用：既有目录与内容必须原样保留（不得复制、不得删除）
+        assert_eq!(
+            fs::read_to_string(target.join("keep.txt")).expect("读取哨兵文件失败"),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn target_gets_numeric_suffix_when_source_differs() {
+        let tmp = TempDir::new("target-conflict");
+        let root = tmp.path().join("models");
+        let existing = root.join("lafei");
+        fs::create_dir_all(&existing).expect("创建既有目录失败");
+        fs::write(existing.join("keep.txt"), "keep").expect("写入哨兵文件失败");
+
+        let src = tmp.path().join("elsewhere").join("lafei");
+        fs::create_dir_all(&src).expect("创建源目录失败");
+
+        let (dest2, name2) =
+            resolve_import_target_dir(&root, &src, "lafei").expect("落点决策失败");
+        assert_eq!(name2, "lafei (2)");
+        assert_eq!(dest2, root.join("lafei (2)"));
+
+        // 既有目录不得被删除 / 改写
+        assert_eq!(
+            fs::read_to_string(existing.join("keep.txt")).expect("读取哨兵文件失败"),
+            "keep"
+        );
+
+        // 再占一个序号 → (3)
+        fs::create_dir_all(&dest2).expect("创建 (2) 目录失败");
+        let (dest3, name3) =
+            resolve_import_target_dir(&root, &src, "lafei").expect("落点决策失败");
+        assert_eq!(name3, "lafei (3)");
+        assert_eq!(dest3, root.join("lafei (3)"));
+    }
+
+    #[test]
+    fn target_name_stays_within_length_limit() {
+        let tmp = TempDir::new("target-long");
+        let root = tmp.path().join("models");
+        let long_base: String = "a".repeat(50);
+        fs::create_dir_all(root.join(&long_base)).expect("创建超长名目录失败");
+        let src = tmp.path().join("another-source");
+        fs::create_dir_all(&src).expect("创建源目录失败");
+
+        let (_, name) =
+            resolve_import_target_dir(&root, &src, &long_base).expect("落点决策失败");
+        assert!(name.ends_with(" (2)"), "应带同名序号后缀，实际: {name}");
+        assert!(
+            name.chars().count() <= MAX_MODEL_NAME_LEN,
+            "目录名超过 {MAX_MODEL_NAME_LEN} 字符: {}",
+            name.chars().count()
+        );
+    }
 }

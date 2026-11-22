@@ -8,6 +8,9 @@
 - 渲染：PixiJS 6.5 + pixi-live2d-display 0.4（**自动识别** `.model.json` 与 `.model3.json`）
 - 依赖：全部 **本地 vendor 直引**（`web/vendor/` 已内置运行时，**纯离线运行、无需联网**），不引入打包器、不占用根 `package.json`
 - 交互：视线跟随、仅命中模型可拖拽、点击反应、设置面板浮层、鼠标穿透联动
+- 多模型同显：同一窗口最多 **6** 个模型实例，各自位置独立持久化（切换 = 替换活动实例，另有「＋以新实例显示」）
+- 全屏雨效：独立 canvas 雨层（小雨 / 中雨 / 大雨 / 雷雨）+ 可独立开关的雨声/雷声音效
+- 模型存放目录：Tauri 外壳下可在设置面板配置（Electron / 浏览器自动置灰）
 - 外壳桥：统一 `bridge` 抽象，浏览器直开自动降级为 no-op
 
 ---
@@ -24,15 +27,27 @@ web/
 │  └─ pixi-live2d-display.min.js
 ├─ models/
 │  └─ models.json                 # 模型清单（可自行编辑；缺失则用内置演示模型）
+├─ assets/
+│  └─ audio/                      # 雨声（外部 FLAC，非 CC0）/ 雷声（项目内自制 CC0-1.0）
+│     ├─ rain-loop.flac
+│     ├─ thunder.wav
+│     └─ LICENSES.md              # 来源 / 许可 / SHA-256 记录
 ├─ src/
-│  ├─ main.js                     # 入口编排：创建 Application → 加载模型 → 面板 → 交互 → 外壳桥
-│  ├─ bridge.js                   # Electron / Tauri / 浏览器 统一桥（含降级）
+│  ├─ main.js                     # 入口编排：Application → 实例恢复 / 单模型回退 → 面板 → 交互 → 雨效 → 外壳桥
+│  ├─ bridge.js                   # Electron / Tauri / 浏览器 统一桥（含降级；含模型存放目录 3 方法）
+│  ├─ app/
+│  │  └─ instances.js             # 实例编排与持久化（restoreAll / addFromCatalog / remove / rememberPosition）
+│  ├─ effects/
+│  │  └─ rain.js                  # 全屏雨层（四档 + 闪电）+ 雨声 / 雷声音频控制
 │  ├─ live2d/
-│  │  └─ modelLoader.js           # 加载/切换模型、自动缩放居中、透明度/缩放（loadModel/currentModel/getModelOptions）
+│  │  └─ modelLoader.js           # 多实例注册表 + 活动实例；加载/切换、自动缩放居中、透明度/缩放
 │  ├─ interaction/
-│  │  └─ petInteraction.js        # 视线跟随 / 命中判定 / 拖拽（仅模型）/ 点击反应 / 穿透联动
+│  │  └─ petInteraction.js        # 视线跟随 / 按最上层命中 / 拖拽（仅该实例）/ 点击反应 / 穿透联动
 │  └─ ui/
-│     └─ settingsPanel.js         # 浮层设置面板（透明度、缩放、模型列表、置顶、穿透、导入、退出）
+│     ├─ settingsPanel.js         # 浮层设置面板壳（挂载 3 个新区块 + 模型列表「＋」按钮）
+│     ├─ importRootPanel.js       # 「模型存放目录」区块（选择 / 更改 / 恢复默认）
+│     ├─ instancePanel.js         # 「已显示模型」区块（n/6 计数、选中、两段式移除）
+│     └─ rainPanel.js             # 「全屏下雨」区块（开关 / 四档 / 音效，关闭时折叠）
 └─ README.md
 ```
 
@@ -163,9 +178,10 @@ fn get_model_list() -> Vec<serde_json::Value> { vec![] }
 fn import_model() -> Option<serde_json::Value> { None }
 ```
 
-> **重要限制**：Tauri 的 `setIgnoreCursorEvents(true)` **不会转发 `mousemove`**，因此无法实现「悬停命中才可点」的
-> 自动穿透。本前端在 Tauri 下会**自动切换为「常驻可点」**，并把设置面板中的「鼠标穿透」开关置灰；
-> 如需穿透，请在外壳侧自行实现（例如配合全局鼠标位置轮询后调用 `setIgnoreCursorEvents`）。
+> **穿透实现**：Tauri 的 `setIgnoreCursorEvents(true)` **不会转发 `mousemove`**，因此无法仅靠事件实现「悬停命中才可点」。
+> 本工程的 Tauri 外壳为此额外提供 `poll_cursor` 命令（Rust 侧读取窗口内光标坐标），前端在 `petInteraction.js` 中
+> 以 50ms 间隔轮询光标、命中任一模型实例或设置面板时切为可点，其余区域整窗穿透（轮询连续失败时降级为常驻可点）。
+> 若外壳未提供该命令（`bridge.canPollCursor === false`），前端才会自动切换为「常驻可点」并把穿透开关置灰。
 
 ---
 
@@ -299,15 +315,84 @@ node --check /tmp/inline_0.js && node --check /tmp/inline_1.js
 > 复跑命令（Windows，需清除 `ELECTRON_RUN_AS_NODE`）：
 > `env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe <验证脚本>`
 
-## 八、已知限制
+## 八、多实例 / 雨效 / 模型存放目录模块说明
+
+> 本章说明本次新增的前端模块与资源，用于快速定位职责边界；实现细节以各文件头部注释为准。
+
+### 1. 新增模块职责
+
+| 模块 | 职责 | 数据真源 / 约束 |
+| --- | --- | --- |
+| `src/app/instances.js` | 实例编排与持久化：启动恢复（加载 → 回填位置 → 恢复活动实例）、按上限新增（默认排布、`inst-<n>` 单调分配）、移除 / 选中、拖拽位置回写（200ms 节流）、`persistNow()` 立即落盘 | `localStorage` 的 `pet.instances.v1` / `pet.instances.activeId`；持久化**原始路径 `rawUrl`**，禁止写入 `asset://` 地址；所有访问包 `try/catch` |
+| `src/effects/rain.js` | 全屏雨层（独立 canvas）+ 音频控制：四档参数、36ms 门控绘制、雷雨闪电、雨声循环与雷声播放、自动播放解锁、`prefers-reduced-motion` 降级 | 内存运行态（由 `main.js` 恢复配置后注入）；**本模块不读写 `localStorage`** |
+| `src/ui/rainPanel.js` | 「全屏下雨」区块：开关、四档下拉、雨声音效开关；关闭下雨时折叠档位与音效 | 数据真源为 `rain.js` 的 `getRainConfig()`；**禁止写 `localStorage`**；自带 `#pet-rain-style` 样式，不覆盖面板既有规则 |
+| `src/ui/instancePanel.js` | 「已显示模型」区块：`n/6` 计数、活动项高亮、点击选中、两段式移除（3 秒内二次确认，**仅从窗口移除、不删磁盘**） | 数据真源为宿主（实例 store / modelLoader）；**禁止调用 modelLoader、禁止读写 `localStorage`**；复用 `.pet-list*` 既有样式 |
+| `src/ui/importRootPanel.js` | 「模型存放目录」区块：展示当前路径、选择 / 更改、恢复默认、错误提示与不支持态置灰 | 数据真源为**后端 `config.json`**（经 `bridge.getImportRoot()/pickImportRoot()/clearImportRoot()`）；**禁止把路径写入 `localStorage`** |
+
+补充说明：
+
+- `src/live2d/modelLoader.js` 已从「单模型单例」改造为「实例注册表 + 活动实例镜像」：`addInstance` / `removeInstance` /
+  `setActiveInstance` / `setInstancePosition` 等新增 API 与既有导出并存；`loadModel(url)` 在已有实例时语义为
+  **替换活动实例的模型**（保留该实例的 `id` / `rawUrl` / 位置），因此「点击列表切换」与「＋新增实例」互不混淆。
+- `src/interaction/petInteraction.js` 按**最上层命中**原则处理：逆序遍历实例做 `hitTest`，重叠时命中后创建者；
+  拖拽只作用于被拖拽实例，松手时回调一次 `onInstanceMoved(id, x, y)`；穿透判定 = 「命中任一实例 或 命中设置面板 UI」。
+- `src/ui/settingsPanel.js` 只负责**创建 + 挂载 + 透传**三个区块，区块内部逻辑在各自模块；模型列表每行新增「＋」按钮
+  （`title="以新实例显示（最多 6 个）"`），点击不会顺带触发条目的「切换模型」。
+
+### 2. 渲染层级（z-index）
+
+| 层 | 元素 | z-index | 说明 |
+| --- | --- | --- | --- |
+| 1 | `#pet-canvas`（PIXI） | 默认 0 | Live2D 模型绘制 |
+| 2 | `#pet-rain-canvas`（由 `rain.js` 自建并挂到 body） | `9997` | 覆盖全窗口，`pointer-events: none`（**不拦截鼠标**）；在模型之上、设置面板之下 |
+| 3 | `.pet-panel` / `.pet-fab` | `9998` | 设置面板与悬浮开关 |
+| 4 | `#boot-status` | `9999` | 启动状态 / 致命错误提示 |
+| 5 | `#pet-toast` | `10000` | 轻量提示条（导入结果、上限提示等） |
+
+### 3. 持久化键（前端）
+
+| 键 | 值 | 写入方 |
+| --- | --- | --- |
+| `pet.instances.v1` | JSON 数组，顺序 = 创建顺序 | `app/instances.js` |
+| `pet.instances.activeId` | `inst-<n>` 或空串 | `app/instances.js` |
+| `pet.rain.enabled` | `"0"` / `"1"` | `main.js` |
+| `pet.rain.level` | `light` / `moderate` / `heavy` / `thunder` | `main.js` |
+| `pet.rain.sound` | `"0"` / `"1"` | `main.js` |
+| `pet.rain.v1` | 聚合对象 `{ enabled, level, soundEnabled }`（兼容键） | `main.js` |
+| `pet.modelUrl` | 最后加载的模型（既有键，保留兼容） | `main.js` |
+
+雨效默认值：关闭 / `light` / 音效开；实例最多 6 个，超出时拒绝新增并提示。
+
+### 4. 音频资源（`web/assets/audio/`）
+
+- 文件：`rain-loop.flac`（循环雨声，30.00 s，44.1 kHz 立体声 FLAC）与 `thunder.wav`（雷声，4.00 s，单声道 32000 Hz 16 bit PCM）。
+- 引用方式：相对 `index.html` 的 `assets/audio/<name>.<ext>`（**不使用 asset 协议**）；代码按 `ogg → mp3 → flac → wav` 顺序探测，
+  当前仓库提供 `.flac` 与 `.wav`，因此命中第 3 / 第 4 个候选。
+- 缺失容错：文件缺失/不可播放时**不抛错**，雨照常渲染、音频静音，控制台 `console.warn` 一次。
+- 来源与许可（**两者不同，请分别看待**）：
+  - `rain-loop.flac`：**外部来源，非 CC0**——取自 WE（Wallpaper Engine）主题视频《窗外下着雨.mp4》的音轨，
+    转为 FLAC 并截取 30 s；**本项目未取得再分发授权，仅限个人自用，公开发布前须移除或替换**。
+  - `thunder.wav`：**项目内自制、CC0-1.0**（不含外部采样），由仓库根目录 `scripts/generate-rain-audio.mjs`
+    以固定种子合成，可复现（重新生成字节一致）。
+  - 逐文件的来源、作者、许可文本、生成日期与 **SHA-256** 见 `assets/audio/LICENSES.md`；
+    第三方声明汇总见仓库根 `THIRD-PARTY-NOTICES.md`。
+- 打包：音频位于 `web/` 之下，随 Tauri 的 `frontendDist` 内嵌进单 exe，无需额外拷贝。
+
+---
+
+## 九、已知限制
 
 1. **运行时已本地化**（`web/vendor/`，见「四、运行时依赖说明」），**无需联网即可启动**；但**内置演示模型**（来自官方测试资源的 `Shizuku`/`Haru`）仍需联网获取——若需完全离线，请把模型资源下载到本地并更新 `models/models.json`。
-2. **Tauri 不支持「悬停自动穿透」**（其 `setIgnoreCursorEvents` 不转发 `mousemove`），已在桥中标记并在前端自动切换为常驻可点。
+2. **Tauri 的「悬停自动穿透」依赖外壳提供 `poll_cursor` 命令**：由于 `setIgnoreCursorEvents` 不转发 `mousemove`，本工程的 Tauri 外壳以「前端轮询光标 + 命中判定」实现逐区穿透；外壳未提供该命令（或轮询连续失败）时前端自动降级为常驻可点。
 3. 本地预览必须走 HTTP（ESM 不支持 `file://`）。
-4. 导入模型的具体实现取决于外壳：Web 层只调用 `bridge.importModel()`，返回 `{ id, name, url }` 即可接入。5. Electron 的 `setIgnoreMouseEvents(true, { forward: true })` 只转发 `mousemove`、不转发 `mousedown`；
+4. 导入模型的具体实现取决于外壳：Web 层只调用 `bridge.importModel()`，返回 `{ id, name, url }` 即可接入。
+5. Electron 的 `setIgnoreMouseEvents(true, { forward: true })` 只转发 `mousemove`、不转发 `mousedown`；
    窗口由「穿透」切到「可点」依赖鼠标**先移动**到模型/面板上（正常使用必然满足）。
-   若需要「零移动直接点击」的极致体验，需在外壳侧做更细粒度的命中转发（例如 Win32 `WM_NCHITTEST`）。6. 当前 Electron 外壳的 `preload.js` 未暴露 `importModel` / `getModelList`：因此"导入模型"按钮被**禁用**，
+   若需要「零移动直接点击」的极致体验，需在外壳侧做更细粒度的命中转发（例如 Win32 `WM_NCHITTEST`）。
+6. 当前 Electron 外壳的 `preload.js` 未暴露 `importModel` / `getModelList`：因此"导入模型"按钮被**禁用**，
    模型清单回退到 `models.json`。若需启用该能力，请在外壳侧实现并暴露这两个方法（Web 层无需改动，
-   `bridge.capabilities` 会自动识别并启用按钮）。Tauri 外壳同理（未实现 `get_model_list` / `import_model`）。7. Cubism 2.1 模型在切换后的首帧渲染时，`live2d.min.js` 可能输出一次
+   `bridge.capabilities` 会自动识别并启用按钮）。**Tauri 外壳已实现** `get_model_list` / `import_model` /
+   `delete_model` 及模型存放目录三个命令，因此 Tauri 下「导入模型」「删除」「模型存放目录」均可用。
+7. Cubism 2.1 模型在切换后的首帧渲染时，`live2d.min.js` 可能输出一次
    `call update() before draw()` 告警（源于 `pixi-live2d-display` 的 Ticker 注册顺序），
    **不影响模型加载与显示**，属上游库行为。

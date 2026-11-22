@@ -188,7 +188,7 @@ const runtime = detectRuntime();
  * 关键：不能只凭 runtime 判定能力（例如 Electron 未必暴露 importModel/getModelList），
  * 必须逐个检测对应方法是否真实存在于外壳暴露的 API 上。
  *
- * @returns {{interactive:boolean, alwaysOnTop:boolean, quit:boolean, modelList:boolean, importModel:boolean, scanResources:boolean, externalModels:boolean, externalModelsDir:boolean}}
+ * @returns {{interactive:boolean, alwaysOnTop:boolean, quit:boolean, modelList:boolean, importModel:boolean, deleteModel:boolean, scanResources:boolean, externalModels:boolean, externalModelsDir:boolean, importRoot:boolean}}
  */
 function deriveCapabilities() {
   if (runtime === 'electron') {
@@ -209,7 +209,9 @@ function deriveCapabilities() {
       // 外部模型地址（多根：挑选追加 / 读取全部 / 删除 / 清空）；
       // 新接口优先，兼容旧单目录接口（pickExternalModelsDir + getExternalModelsDir）
       externalModelsDir: typeof api.pickExternalModelsDir === 'function'
-        && (typeof api.getExternalModelsDirs === 'function' || typeof api.getExternalModelsDir === 'function')
+        && (typeof api.getExternalModelsDirs === 'function' || typeof api.getExternalModelsDir === 'function'),
+      // 导入根目录（模型导入落点的父目录）：配置真源在后端，Electron 未提供对应契约 → false
+      importRoot: false
     };
   }
 
@@ -236,6 +238,8 @@ function deriveCapabilities() {
       scanResources: false, // 目录资源扫描命令暂未在 Tauri 侧实现（前端据此跳过补齐）
       externalModels: hasAsset,
       externalModelsDir: hasInvoke,
+      // 导入根目录（lib.rs 的 get/pick/clear_import_root 命令；配置存后端 config.json）
+      importRoot: hasInvoke,
       // 光标轮询（lib.rs 的 poll_cursor 命令）：Tauri 的 setIgnoreCursorEvents 不转发
       // mousemove，故以「Rust 侧读取窗口内光标 → 前端命中判定」实现「逐区穿透」。
       pollCursor: hasInvoke
@@ -252,7 +256,8 @@ function deriveCapabilities() {
     deleteModel: false,
     scanResources: false,
     externalModels: false,
-    externalModelsDir: false
+    externalModelsDir: false,
+    importRoot: false
   };
 }
 
@@ -682,6 +687,64 @@ async function deleteModel(idOrPath) {
 }
 
 /**
+ * 归一「导入根目录」的后端返回值：只接受非空字符串，其余一律视为未设置（null）。
+ *
+ * 契约（C-IMPORT-ROOT@1）：后端未设置时返回 null。若某外壳版本误返回数字 / 对象 / 空串，
+ * 前端统一归一为 null，避免把非路径值直接显示在设置面板里。
+ * 注：非空字符串**原样返回**（不做 trim），以免改动用户选择的真实路径。
+ *
+ * @param {*} value 后端返回值
+ * @returns {string|null}
+ */
+function normalizeImportRootPath(value) {
+  if (typeof value !== 'string') return null;
+  return value.trim().length > 0 ? value : null;
+}
+
+/**
+ * 读取当前「导入根目录」（导入模型时的落点父目录）。
+ *
+ * 数据真源为后端 config.json（Tauri 侧 `get_import_root`），前端**不缓存、不写 localStorage**。
+ * 读取失败（命令缺失 / 配置损坏）按「未设置」降级为 null —— 只读操作无需打扰用户。
+ *
+ * @returns {Promise<string|null>} 绝对路径；未设置或当前外壳不支持 → null
+ */
+async function getImportRoot() {
+  if (runtime !== 'tauri' || !capabilities.importRoot) return null;
+  const value = await tauriInvoke('get_import_root');
+  return normalizeImportRootPath(value);
+}
+
+/**
+ * 弹目录选择器设置「导入根目录」（Tauri 侧 `pick_import_root`）。
+ *
+ * 失败（对话框异常 / 写配置失败）必须让用户看到原因，故走严格模式：抛 Error 由调用方展示。
+ * 用户在对话框中取消时后端返回**当前值**且不修改配置，因此非 null 返回值不代表「已更改」，
+ * 调用方应统一 `refresh()` 重新读取，以配置为准。
+ *
+ * @returns {Promise<string|null>} 选择后（取消时为当前值）的路径；不支持 → null
+ * @throws {Error} 命令执行失败
+ */
+async function pickImportRoot() {
+  if (runtime !== 'tauri' || !capabilities.importRoot) return null;
+  const value = await tauriInvokeStrict('pick_import_root');
+  return normalizeImportRootPath(value);
+}
+
+/**
+ * 清空「导入根目录」，恢复默认落点（程序目录 models/）。
+ * 失败同样抛 Error，避免出现「点了没反应」的静默失败。
+ *
+ * @returns {Promise<string|null>} 清空后恒为 null；不支持 → null
+ * @throws {Error} 命令执行失败
+ */
+async function clearImportRoot() {
+  if (runtime !== 'tauri' || !capabilities.importRoot) return null;
+  await tauriInvokeStrict('clear_import_root');
+  return null;
+}
+
+/**
  * 读取当前光标在窗口内的位置（逻辑像素）—— Tauri 专用「逐区穿透」探测接口。
  *
  * Tauri 的 `setIgnoreCursorEvents(true)` 不会像 Electron `forward:true` 那样把 mousemove
@@ -736,6 +799,10 @@ export const bridge = {
   getModelList,
   importModel,
   deleteModel,
+  // 导入根目录（R2）：读 / 选 / 清；Electron 与浏览器降级为 null
+  getImportRoot,
+  pickImportRoot,
+  clearImportRoot,
   pollCursor,
   scanModelResources,
   pickExternalModelsDir,
