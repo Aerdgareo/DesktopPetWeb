@@ -11,12 +11,21 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    # 手动触发时可勾选 mac_only（默认勾选）：只跑 macOS 矩阵组合，其余平台跳过。
+    # tag 推送（push: tags）时本 input 不存在，条件退化为「构建全部平台」，行为不变。
+    inputs:
+      mac_only:
+        description: 只构建 macOS
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
   build:
+    # workflow_dispatch 且 mac_only=true（默认）时仅保留 mac 矩阵组合；win-x64/win-x86/linux 跳过
+    if: ${{ !inputs.mac_only || matrix.tag == 'mac' }}
     strategy:
       fail-fast: false
       matrix:
