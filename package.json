@@ -8,7 +8,9 @@
   "scripts": {
     "start": "electron electron/main.js",
     "dist": "electron-builder",
-    "fetch-vendor": "node scripts/fetch-vendor.mjs"
+    "fetch-vendor": "node scripts/fetch-vendor.mjs",
+    "dist:x64": "electron-builder --win --x64 --dir",
+    "dist:ia32": "electron-builder --win --ia32 --dir"
   },
   "devDependencies": {
     "electron": "^31.0.0",

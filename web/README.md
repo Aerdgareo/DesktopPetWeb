@@ -24,6 +24,11 @@ web/
 │  └─ pixi-live2d-display.min.js
 ├─ models/
 │  └─ models.json                 # 模型清单（可自行编辑；缺失则用内置演示模型）
+├─ assets/
+│  └─ audio/                      # 雨声（外部 FLAC，非 CC0）/ 雷声（项目内自制 CC0-1.0）
+│     ├─ rain-loop.flac
+│     ├─ thunder.wav
+│     └─ LICENSES.md              # 来源 / 许可 / SHA-256 记录
 ├─ src/
 │  ├─ main.js                     # 入口编排：创建 Application → 加载模型 → 面板 → 交互 → 外壳桥
 │  ├─ bridge.js                   # Electron / Tauri / 浏览器 统一桥（含降级）
@@ -311,3 +316,22 @@ node --check /tmp/inline_0.js && node --check /tmp/inline_1.js
    `bridge.capabilities` 会自动识别并启用按钮）。Tauri 外壳同理（未实现 `get_model_list` / `import_model`）。7. Cubism 2.1 模型在切换后的首帧渲染时，`live2d.min.js` 可能输出一次
    `call update() before draw()` 告警（源于 `pixi-live2d-display` 的 Ticker 注册顺序），
    **不影响模型加载与显示**，属上游库行为。
+---
+
+## 九、音频资源（`web/assets/audio/`）
+
+全屏雨效（`src/effects/rain.js`）所需的两份音频，**许可状况完全不同，请分别看待**：
+
+| 文件 | 用途 | 参数 | 来源 / 许可 |
+| --- | --- | --- | --- |
+| `rain-loop.flac` | 循环雨声 | 30.00 s / 44.1 kHz 立体声 FLAC / 2,496,309 字节 | **外部来源（WE 主题视频《窗外下着雨.mp4》音轨提取），非 CC0，不可再分发** |
+| `thunder.wav` | 雷雨档雷声 | 4.00 s / 单声道 32000 Hz 16 bit PCM / 256,044 字节 | 项目内自制（`scripts/generate-rain-audio.mjs` 固定种子合成），**CC0-1.0** |
+
+- **⚠️ `rain-loop.flac` 不是 CC0、也不是公共领域素材**：本项目未取得再分发授权，
+  **仅限个人自用**；公开发布或再分发安装包前必须先移除或替换
+  （见 `assets/audio/LICENSES.md`「替代方案」）。
+- **引用方式**：相对 `index.html` 的 `assets/audio/<name>.<ext>`（不使用 asset 协议）；
+  代码按 `ogg → mp3 → flac → wav` 顺序探测（`AUDIO_EXTS`），当前命中 `.flac` / `.wav`。
+- **缺失容错**：文件缺失或不可播放时**不抛错**，雨照常渲染、音频静音，控制台 `console.warn` 一次。
+- **完整记录**：逐文件的来源、作者、许可文本、获取/生成日期与 **SHA-256** 见 `assets/audio/LICENSES.md`；
+  第三方声明汇总见仓库根 `THIRD-PARTY-NOTICES.md` 第 5 节。

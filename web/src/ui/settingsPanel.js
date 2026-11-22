@@ -8,6 +8,13 @@
  *  - 提供 isPointerOverUI(x,y)，与交互层联动实现「鼠标悬停面板时窗口可点」。
  *
  * 能力项：缩放滑条、模型切换列表、置顶开关、穿透开关、导入模型、退出、关闭。
+ *
+ * 区块挂载（本文件只做「创建 + 挂载 + 透传」，区块内部逻辑在各自模块）：
+ *  - ui/rainPanel.js       雨效（T7）
+ *  - ui/effectsPanel.js    其他全屏特效（下雪/樱花/群星/音符；排在雨效区块之后）
+ *  - ui/instancePanel.js   已显示模型（T8）
+ *  - ui/importRootPanel.js 模型存放目录（T2）
+ * 另：模型条目提供「＋以新实例显示」（调用 deps.onAddInstance）。
  */
 
 const STYLE_ID = 'pet-settings-style';
@@ -88,17 +95,26 @@ function ensureStyle() {
   .pet-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 4px; }
   .pet-list::-webkit-scrollbar-track { background: transparent; }
 
+  /* 模型条目行：可点区域 + 可选「删除」小按钮并排 */
+  .pet-list__row { display: flex; align-items: center; }
   .pet-list__item {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    width: 100%; padding: 7px 10px; cursor: pointer;
+    flex: 1 1 auto; min-width: 0; padding: 7px 10px; cursor: pointer;
     background: transparent; border: 0; color: #dfe2ec;
     font-size: 12px; text-align: left;
   }
   .pet-list__item:hover { background: rgba(255, 255, 255, 0.07); }
   .pet-list__item.is-active { background: rgba(91, 157, 255, 0.22); color: #fff; }
+  .pet-list__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pet-list__row .pet-btn--mini { flex: none; margin: 0 6px 0 4px; }
+  .pet-list__row .pet-btn--mini.is-armed { background: rgba(255, 90, 90, 0.42); }
   .pet-list__badge {
     flex: none; padding: 1px 6px; border-radius: 999px; font-size: 10px;
     background: rgba(255, 255, 255, 0.1); color: #b9bccb;
+  }
+  /* 「外源」徽标：标记该模型来自外部文件夹引用（不随程序分发、不可删除） */
+  .pet-list__badge--source {
+    background: rgba(255, 190, 80, 0.18); color: #ffca7a;
   }
   .pet-list__empty { padding: 10px; color: #9aa0b3; text-align: center; }
 
@@ -162,6 +178,11 @@ function ensureStyle() {
   }
   .pet-fab:hover { background: rgba(91, 157, 255, 0.3); }
   .pet-fab[hidden] { display: none; }
+
+  /* 雨效区块的折叠容器（T7 自带该规则，此处仅兜底）：flex 布局会覆盖 hidden 的默认 display:none */
+  .pet-rain-options[hidden] { display: none; }
+  /* 其他全屏特效区块的折叠容器（自带该规则，此处仅兜底） */
+  .pet-effects-options[hidden] { display: none; }
   `;
   document.head.appendChild(style);
 }
@@ -175,6 +196,22 @@ function el(tag, className, text) {
 
 /** 面板拖拽时至少需保留的可见面积比例（低于此值将缓动回弹，避免被"拖没"） */
 const MIN_VISIBLE_RATIO = 0.06;
+
+/** 同显模型实例上限的默认值（与实例区块保持一致） */
+const DEFAULT_INSTANCE_LIMIT = 6;
+
+/**
+ * 归一「同显实例上限」：仅接受 ≥1 的有限数，其余回退到 fallback。
+ *
+ * @param {*} value
+ * @param {number} [fallback=DEFAULT_INSTANCE_LIMIT]
+ * @returns {number}
+ */
+function normalizeLimit(value, fallback = DEFAULT_INSTANCE_LIMIT) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.floor(n);
+}
 
 /** 计算某一维度在窗口 [0, max] 裁剪后的可见长度 */
 function visibleLength(pos, len, max) {
@@ -259,7 +296,28 @@ function computeBounceTarget(pos, size, win, minVisibleRatio = MIN_VISIBLE_RATIO
  *   onQuit?: ()=>void,
  *   onInteractiveModeChange?: (auto:boolean)=>void,  // 勾选=自动穿透
  *   onAlwaysOnTopChange?: (value:boolean)=>void,
-
+ *   onAlphaChange?: (alpha:number)=>void,
+ *   onScaleChange?: (percent:number)=>void,
+ *
+ *   // —— 多实例（T8 区块 / 模型条目「＋」）——
+ *   instances?: Array<InstanceView>,                  // [{ id, name, active?, kind? }]
+ *   instanceLimit?: number,                           // 同显上限（默认 6）
+ *   onAddInstance?: (url:string, model:object)=>void, // 模型条目「＋以新实例显示」
+ *   onSelectInstance?: (id:string)=>void,             // 已显示模型区块：选中
+ *   onRemoveInstance?: (id:string)=>void,             // 已显示模型区块：仅从窗口移除
+ *
+ *   // —— 雨效（T7 区块）——
+ *   rain?: object|null,                               // C-RAIN-VISUAL@1 实例；null = 不可用
+ *   getRain?: ()=>object|null,                        // 延迟取 rain 实例（rain 缺省时使用）
+ *   onRainChange?: (patch:object)=>void,              // { enabled?, level?, soundEnabled? }
+ *
+ *   // —— 其他全屏特效（effectsPanel 区块；排在雨效区块之后）——
+ *   getEffects?: ()=>object|null,                     // 延迟取 effects 实例；缺失 = 不可用
+ *   onEffectsChange?: (patch:object)=>void,           // { enabled?, kind? }
+ *
+ *   // —— 模型存放目录（T2 区块）——
+ *   onImportRootChanged?: ()=>Promise<any>|any,       // 变更后回调（缺省走 onRefreshModels）
+ *
  *   scalePercent?: number
  * }} deps
  */
@@ -273,6 +331,11 @@ function createSettingsPanel(deps) {
   let models = Array.isArray(deps.models) ? deps.models.slice() : [];
   let currentUrl = deps.currentModelUrl || '';
   let currentKind = '';   // 当前模型「运行时判定」的 Cubism 版本（优先于清单声明）
+
+  /** 同显实例上限（模型条目「＋」提示与实例区块计数共用；setInstanceLimit 可更新） */
+  let instanceLimit = normalizeLimit(deps.instanceLimit);
+  /** 「＋」按钮 title（含当前上限，随 setInstanceLimit 同步更新） */
+  let addInstanceTitle = `以新实例显示（最多 ${instanceLimit} 个）`;
 
   // ---------------- DOM ----------------
 
@@ -511,7 +574,8 @@ function createSettingsPanel(deps) {
     topSwitch.dataset.disabled = '1';
     topCheckbox.disabled = true;
   }
-  // 外壳不具备 mousemove 转发能力（如 Tauri）时，无法实现「悬停自动穿透」
+  // 外壳需具备「悬停探测」能力才能自动穿透：Electron 经 mousemove 转发、
+  // Tauri 经 poll_cursor 光标轮询；二者由 main.js 统一以 penetrateSupported 传入。
   const penetrateSupported = deps.penetrateSupported !== false;
   if (!caps.interactive || !penetrateSupported) {
     penetrateSwitch.dataset.disabled = '1';
@@ -524,14 +588,15 @@ function createSettingsPanel(deps) {
   const importBtn = el('button', 'pet-btn', '导入模型');
   importBtn.type = 'button';
   if (!caps.importModel) {
-    // 外壳未提供 importModel：直接禁用并说明原因，避免"按钮启用却空操作"
+    // 外壳未提供 importModel：置灰并说明原因
     importBtn.disabled = true;
     importBtn.title = '当前外壳不支持导入';
   }
   const quitBtn = el('button', 'pet-btn pet-btn--danger', '退出');
   quitBtn.type = 'button';
   if (!caps.quit) quitBtn.disabled = true;
-  actions.appendChild(importBtn);
+  // 「导入模型」仅在壳具备该能力时渲染（Tauri/Electron 均支持：复制到程序 models/）
+  if (caps.importModel) actions.appendChild(importBtn);
   actions.appendChild(quitBtn);
 
   // 外部模型地址（可多个；与内置 models/ 并存并合并进模型列表）
@@ -608,13 +673,35 @@ function createSettingsPanel(deps) {
 
   function normalizeModel(m) {
     if (!m) return null;
-    if (typeof m === 'string') return { id: m, name: m, url: m, type: '' };
+    if (typeof m === 'string') return { id: m, name: m, url: m, rawUrl: m, type: '', source: '' };
     return {
       id: m.id || m.url || m.name || '',
       name: m.name || m.id || m.url || '未命名模型',
       url: m.url || '',
-      type: m.type || ''
+      // 原始 url（未转 asset 协议）：删除时传给 Rust 才能定位磁盘目录
+      rawUrl: m.rawUrl || m.url || '',
+      type: m.type || '',
+      source: m.source || ''
     };
+  }
+
+  /** 来源文案：用于条目提示（说明可否删除及原因） */
+  const SOURCE_LABELS = {
+    local: '内置模型（随程序分发，不可删除）',
+    demo: '演示模型（联网加载，不可删除）',
+    imported: '已导入到程序 models/（可删除）',
+    external: '外源：外部文件夹引用（不随程序分发，不可删除；请在外部文件夹中管理）'
+  };
+
+  /**
+   * 该模型是否可删除：仅「导入到程序 models/ 的模型」（source='imported'）可删。
+   * 内置模型（source='local'/'demo'）随程序分发、外部文件夹引用（source='external'）
+   * 由用户在磁盘上自行管理 —— 二者均不可在此删除（不显示删除按钮）。
+   */
+  function isDeletable(m) {
+    if (!caps.deleteModel) return false; // 外壳不具备删除能力时不显示删除按钮
+    const s = (m && m.source) || '';
+    return s === 'imported';
   }
 
   function renderList() {
@@ -627,15 +714,25 @@ function createSettingsPanel(deps) {
       const m = normalizeModel(raw);
       if (!m || !m.url) return;
 
+      const row = el('div', 'pet-list__row');
+
       const item = el('button', 'pet-list__item');
       item.type = 'button';
-      item.title = m.url;
+      // 条目提示：对「不可删除」的来源（内置 models/、演示模型）说明原因，
+      // 避免用户因找不到「删除」按钮而困惑。
+      const srcLabel = SOURCE_LABELS[m.source]
+        || (isDeletable(m) ? '' : '该模型不可删除（仅“导入到程序 models/”的模型可删）');
+      item.title = srcLabel ? `${srcLabel}\n${m.url}` : m.url;
 
-      const nameSpan = el('span', undefined, m.name);
+      const nameSpan = el('span', 'pet-list__name', m.name);
       item.appendChild(nameSpan);
       // 当前模型优先显示「运行时判定」的版本，避免清单里手写/缺失 type 造成误标
       const badgeText = (m.url === currentUrl && currentKind) ? currentKind : m.type;
       if (badgeText) item.appendChild(el('span', 'pet-list__badge', badgeText));
+      // 外部文件夹引用来源 → 显示「外源」徽标（此类模型不随程序分发、无删除按钮）
+      if (m.source === 'external') {
+        item.appendChild(el('span', 'pet-list__badge pet-list__badge--source', '外源'));
+      }
 
       if (m.url === currentUrl) item.classList.add('is-active');
       item.addEventListener('click', () => {
@@ -649,8 +746,71 @@ function createSettingsPanel(deps) {
           modelLoader.switchModel(m.url);
         }
       });
+      row.appendChild(item);
 
-      list.appendChild(item);
+      // 「＋以新实例显示」：仅当宿主提供 onAddInstance 时渲染（缺省不显示，保持旧外观）。
+      // 与「删除」按钮同排，故必须 stopPropagation，避免顺带触发条目的「切换模型」。
+      if (typeof deps.onAddInstance === 'function') {
+        const addBtn = el('button', 'pet-btn pet-btn--mini', '＋');
+        addBtn.type = 'button';
+        addBtn.dataset.role = 'model-add-instance';
+        addBtn.title = addInstanceTitle;
+        addBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          setStatus(`正在以新实例显示：${m.name}…`);
+          try {
+            const ret = deps.onAddInstance(m.url, m);
+            // 宿主回调可能是 async（Promise reject 不应成为未捕获异常）
+            if (ret && typeof ret.catch === 'function') {
+              ret.catch((err) => {
+                console.warn('[settingsPanel] 新增实例失败:', err);
+                setStatus(`新增实例失败：${err && err.message ? err.message : err}`);
+              });
+            }
+          } catch (err) {
+            console.warn('[settingsPanel] 新增实例失败:', err);
+            setStatus(`新增实例失败：${err && err.message ? err.message : err}`);
+          }
+        });
+        row.appendChild(addBtn);
+      }
+
+      // 「删除」按钮：仅对可删来源显示；两段式防误删 ——
+      // 首次点击进入「确认删除」待命态（3 秒后自动复位），再次点击才真正删除。
+      if (isDeletable(m)) {
+        const delBtn = el('button', 'pet-btn pet-btn--danger pet-btn--mini', '删除');
+        delBtn.type = 'button';
+        delBtn.title = `删除模型：${m.name}`;
+        let armed = false;
+        let timer = 0;
+        const reset = () => {
+          armed = false;
+          delBtn.textContent = '删除';
+          delBtn.classList.remove('is-armed');
+        };
+        delBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (!armed) {
+            armed = true;
+            delBtn.textContent = '确认删除';
+            delBtn.classList.add('is-armed');
+            clearTimeout(timer);
+            timer = setTimeout(reset, 3000); // 3 秒未确认 → 自动复位
+            return;
+          }
+          clearTimeout(timer);
+          reset();
+          delBtn.disabled = true;
+          if (typeof deps.onDeleteModel === 'function') {
+            Promise.resolve(deps.onDeleteModel(m)).finally(() => { delBtn.disabled = false; });
+          } else {
+            delBtn.disabled = false;
+          }
+        });
+        row.appendChild(delBtn);
+      }
+
+      list.appendChild(row);
     });
   }
 
@@ -683,6 +843,8 @@ penetrateCheckbox.addEventListener('change', () => {
   });
 
   importBtn.addEventListener('click', () => {
+    // 即时反馈：对话框弹出前后状态栏可见变化，避免「点了没反应」的观感
+    setStatus('请选择 Live2D 模型（文件夹或入口文件）…');
     if (typeof deps.onImportModel === 'function') deps.onImportModel();
   });
 
@@ -922,6 +1084,247 @@ penetrateCheckbox.addEventListener('change', () => {
     header.addEventListener('mousedown', onDown);
   })();
 
+  // ---------------- 独立区块挂载（模型存放目录 / 已显示模型 / 雨效 / 全屏特效） ----------------
+  //
+  // 四个区块分别由独立模块交付（ui/importRootPanel.js、ui/instancePanel.js、
+  // ui/rainPanel.js、ui/effectsPanel.js），本面板只负责「创建 + 挂载 + 透传」，不复写区块内部逻辑。
+  //
+  // 采用**动态 import** 而非文件顶部静态 import：任一区块模块缺失或加载失败时只跳过该区块
+  // （console.warn），不会让本模块整体加载失败导致整个设置面板不可用。
+  // 挂载采用「锚点插入」：区块就绪后插到锚点之前，因此 panel.children 顺序恒为契约顺序
+  // header → scale → rain → effects → list → instance → expr → pose → switch → actions → importRoot → ext → reset → status
+  // （锚点均为常驻节点；rain 与 effects 共用 listSection 锚点，靠「effects 在 rain 之后挂载」
+  //   保证二者相对顺序稳定，与模块加载快慢无关）。
+
+  let destroyed = false;
+  let rainPanelCtrl = null;
+  let effectsPanelCtrl = null;
+  let instancePanelCtrl = null;
+  let importRootPanelCtrl = null;
+  let pendingInstances = null;      // 区块就绪前的 setInstances 调用：{ list, activeId }
+  let pendingInstanceLimit = null;  // 区块就绪前的 setInstanceLimit 调用
+  let pendingRainConfig = null;     // 区块就绪前的 setRainConfig 调用
+  let pendingEffectsConfig = null;  // 区块就绪前的 setEffectsConfig 调用
+
+  /**
+   * 解析雨效实例：deps.rain 优先，其次 deps.getRain()（延迟取用）。
+   * 缺失 / 抛错 → null（rainPanel 会自行渲染「雨效模块不可用」）。
+   */
+  function resolveRain() {
+    if (deps.rain) return deps.rain;
+    if (typeof deps.getRain !== 'function') return null;
+    try {
+      const rain = deps.getRain();
+      return rain && typeof rain === 'object' ? rain : null;
+    } catch (err) {
+      console.warn('[settingsPanel] 获取雨效实例失败:', err);
+      return null;
+    }
+  }
+
+  /**
+   * 解析氛围特效实例：deps.effects 优先，其次 deps.getEffects()（延迟取用）。
+   * 缺失 / 抛错 → null（effectsPanel 会自行渲染「特效模块不可用」）。
+   */
+  function resolveEffects() {
+    if (deps.effects && typeof deps.effects === 'object') return deps.effects;
+    if (typeof deps.getEffects !== 'function') return null;
+    try {
+      const fx = deps.getEffects();
+      return fx && typeof fx === 'object' ? fx : null;
+    } catch (err) {
+      console.warn('[settingsPanel] 获取氛围特效实例失败:', err);
+      return null;
+    }
+  }
+
+  /** 在锚点之前插入区块根；锚点缺失（异常布局）时退化为追加到面板末尾 */
+  function mountBefore(anchor, element) {
+    if (!element) return;
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(element, anchor);
+    else panel.appendChild(element);
+  }
+
+  /**
+   * 异步加载并挂载一个可选区块；任何失败都只 warn 并跳过，不影响面板其余部分。
+   *
+   * @param {{
+   *   loader: () => Promise<any>,
+   *   exportName: string,
+   *   label: string,
+   *   anchor: HTMLElement,
+   *   build: (factory: Function) => object,
+   *   onReady: (ctrl: object) => void
+   * }} opts
+   * @returns {Promise<void>} 区块已处理（挂载成功 / 跳过）后 resolve，永不 reject
+   */
+  function mountOptionalSection(opts) {
+    let loading = null;
+    try {
+      loading = opts.loader();
+    } catch (err) {
+      console.warn(`[settingsPanel] 加载「${opts.label}」区块模块失败，已跳过:`, err);
+      return Promise.resolve();
+    }
+
+    return Promise.resolve(loading)
+      .then((mod) => {
+        const factory = mod && (typeof mod[opts.exportName] === 'function' ? mod[opts.exportName] : mod.default);
+        if (typeof factory !== 'function') {
+          console.warn(`[settingsPanel] 「${opts.label}」区块模块缺少 ${opts.exportName} 导出，已跳过`);
+          return;
+        }
+        let ctrl = null;
+        try {
+          ctrl = opts.build(factory);
+        } catch (err) {
+          console.warn(`[settingsPanel] 创建「${opts.label}」区块失败，已跳过:`, err);
+          return;
+        }
+        if (!ctrl || !ctrl.element) {
+          console.warn(`[settingsPanel] 「${opts.label}」区块未返回 element，已跳过`);
+          return;
+        }
+        if (destroyed) {
+          // 面板已销毁：不挂载，但清理区块自身持有的定时器 / 监听
+          if (typeof ctrl.destroy === 'function') ctrl.destroy();
+          return;
+        }
+        mountBefore(opts.anchor, ctrl.element);
+        opts.onReady(ctrl);
+      })
+      .catch((err) => {
+        console.warn(`[settingsPanel] 加载「${opts.label}」区块失败，已跳过:`, err);
+      });
+  }
+
+  /**
+   * 挂载「其他全屏特效」区块（下雪/樱花/群星/音符）。
+   *
+   * 位置契约：紧跟雨效区块之后、模型列表之前。由于两个区块都以 `listSection` 为锚点
+   * （插入到锚点前），只需保证「特效晚于雨效挂载」，最终顺序即为 rain → effects。
+   * 加载/创建失败仅 warn 跳过，不影响面板其余部分。
+   */
+  function mountEffectsSection() {
+    mountOptionalSection({
+      loader: () => import('./effectsPanel.js'),
+      exportName: 'createEffectsPanel',
+      label: '其他全屏特效',
+      anchor: listSection,
+      build: (factory) => factory({
+        effects: resolveEffects(),
+        setStatus,
+        onChange: (patch) => {
+          if (typeof deps.onEffectsChange !== 'function') return;
+          try {
+            const ret = deps.onEffectsChange(patch);
+            if (ret && typeof ret.catch === 'function') {
+              ret.catch((err) => console.warn('[settingsPanel] onEffectsChange 回调失败:', err));
+            }
+          } catch (err) {
+            console.warn('[settingsPanel] onEffectsChange 回调失败:', err);
+          }
+        }
+      }),
+      onReady: (ctrl) => {
+        effectsPanelCtrl = ctrl;
+        if (pendingEffectsConfig) {
+          ctrl.setConfig(pendingEffectsConfig);
+          pendingEffectsConfig = null;
+        }
+      }
+    });
+  }
+
+  // 雨效区块（T7）：deps.rain 缺失时区块内部自渲染「不可用」，故始终尝试挂载
+  const rainMounting = mountOptionalSection({
+    loader: () => import('./rainPanel.js'),
+    exportName: 'createRainPanel',
+    label: '雨效',
+    anchor: listSection,   // 位于「缩放」之后、「模型列表」之前
+    build: (factory) => factory({
+      rain: resolveRain(),
+      setStatus,
+      onChange: (patch) => {
+        if (typeof deps.onRainChange !== 'function') return;
+        try {
+          const ret = deps.onRainChange(patch);
+          if (ret && typeof ret.catch === 'function') {
+            ret.catch((err) => console.warn('[settingsPanel] onRainChange 回调失败:', err));
+          }
+        } catch (err) {
+          console.warn('[settingsPanel] onRainChange 回调失败:', err);
+        }
+      }
+    }),
+    onReady: (ctrl) => {
+      rainPanelCtrl = ctrl;
+      if (pendingRainConfig) {
+        ctrl.setConfig(pendingRainConfig);
+        pendingRainConfig = null;
+      }
+    }
+  });
+
+  // 特效区块排在雨效之后：等雨效挂载流程结束再挂载（双分支都挂，永不 reject）
+  rainMounting.then(mountEffectsSection, mountEffectsSection);
+
+  // 已显示模型区块（T8）：位于「模型列表」之后、「表情」之前
+  mountOptionalSection({
+    loader: () => import('./instancePanel.js'),
+    exportName: 'createInstancePanel',
+    label: '已显示模型',
+    anchor: exprCtl.section,
+    build: (factory) => factory({
+      instances: Array.isArray(deps.instances) ? deps.instances : undefined,
+      limit: instanceLimit,
+      onSelect: deps.onSelectInstance,
+      onRemove: deps.onRemoveInstance
+    }),
+    onReady: (ctrl) => {
+      instancePanelCtrl = ctrl;
+      if (pendingInstanceLimit != null) {
+        ctrl.setLimit(pendingInstanceLimit);
+        pendingInstanceLimit = null;
+      }
+      if (pendingInstances) {
+        ctrl.setInstances(pendingInstances.list, pendingInstances.activeId);
+        pendingInstances = null;
+      }
+    }
+  });
+
+  // 模型存放目录区块（T2）：位于「操作按钮」之后、「外部模型文件夹」之前
+  mountOptionalSection({
+    loader: () => import('./importRootPanel.js'),
+    exportName: 'createImportRootPanel',
+    label: '模型存放目录',
+    anchor: extSection,
+    build: (factory) => factory({
+      bridge,
+      setStatus,
+      // 导入目录变化会改变新模型的落点 → 通知宿主重载模型清单。
+      // 宿主若提供专门回调（onImportRootChanged），优先交由它统一处理（含路径显示刷新）。
+      onChanged: () => {
+        if (typeof deps.onImportRootChanged === 'function') {
+          try {
+            const ret = deps.onImportRootChanged();
+            if (ret && typeof ret.catch === 'function') {
+              ret.catch((err) => console.warn('[settingsPanel] onImportRootChanged 回调失败:', err));
+            }
+            return undefined;
+          } catch (err) {
+            console.warn('[settingsPanel] onImportRootChanged 回调失败:', err);
+          }
+        }
+        return refreshModels();
+      }
+    }),
+    onReady: (ctrl) => {
+      importRootPanelCtrl = ctrl;
+    }
+  });
+
   // ---------------- 显隐 / UI 命中 ----------------
 
   function show() {
@@ -1012,7 +1415,83 @@ penetrateCheckbox.addEventListener('change', () => {
     refreshExternalDir,
     /** 清空全部外部模型地址（兼容能力，供外部调用） */
     clearExternalDirs,
+    /**
+     * 更新「已显示模型」区块（转发 instancePanel.setInstances）。
+     * 区块模块尚未加载完成时缓存最后一次调用，就绪后立即补渲染。
+     *
+     * @param {Array<{id:string,name:string,active?:boolean,kind?:string}>} list
+     * @param {string|null} [activeId]
+     */
+    setInstances(list, activeId) {
+      if (instancePanelCtrl) {
+        instancePanelCtrl.setInstances(list, activeId);
+        return;
+      }
+      pendingInstances = { list, activeId };
+    },
+    /**
+     * 设置同显实例上限（转发 instancePanel.setLimit），并同步「＋」按钮提示文案。
+     *
+     * @param {number} n
+     */
+    setInstanceLimit(n) {
+      const next = normalizeLimit(n, instanceLimit);
+      instanceLimit = next;
+      if (instancePanelCtrl) instancePanelCtrl.setLimit(next);
+      else pendingInstanceLimit = next;
+
+      const title = `以新实例显示（最多 ${next} 个）`;
+      if (title !== addInstanceTitle) {
+        addInstanceTitle = title;
+        renderList();
+      }
+    },
+    /**
+     * 用给定配置同步雨效区块显示（转发 rainPanel.setConfig）。
+     * 区块模块尚未加载完成时缓存最后一次调用，就绪后立即补同步。
+     *
+     * @param {{enabled?:boolean, level?:string, soundEnabled?:boolean}} cfg
+     */
+    setRainConfig(cfg) {
+      if (rainPanelCtrl) {
+        rainPanelCtrl.setConfig(cfg);
+        return;
+      }
+      pendingRainConfig = cfg;
+    },
+    /**
+     * 用给定配置同步「其他全屏特效」区块显示（转发 effectsPanel.setConfig）。
+     * 区块模块尚未加载完成时缓存最后一次调用，就绪后立即补同步。
+     *
+     * @param {{enabled?:boolean, kind?:string}} cfg
+     */
+    setEffectsConfig(cfg) {
+      if (effectsPanelCtrl) {
+        effectsPanelCtrl.setConfig(cfg);
+        return;
+      }
+      pendingEffectsConfig = cfg;
+    },
     destroy() {
+      destroyed = true;
+      // 区块自身持有定时器 / 事件监听：一并销毁（其 DOM 随后随面板移除）
+      for (const ctrl of [rainPanelCtrl, effectsPanelCtrl, instancePanelCtrl, importRootPanelCtrl]) {
+        if (ctrl && typeof ctrl.destroy === 'function') {
+          try {
+            ctrl.destroy();
+          } catch (err) {
+            console.warn('[settingsPanel] 销毁区块失败:', err);
+          }
+        }
+      }
+      rainPanelCtrl = null;
+      effectsPanelCtrl = null;
+      instancePanelCtrl = null;
+      importRootPanelCtrl = null;
+      pendingInstances = null;
+      pendingInstanceLimit = null;
+      pendingRainConfig = null;
+      pendingEffectsConfig = null;
       panel.remove();
       fab.remove();
     }

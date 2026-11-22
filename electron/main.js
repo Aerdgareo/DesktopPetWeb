@@ -66,6 +66,12 @@ const MODELS_PARENT = path.dirname(MODELS_DIR);
 // 空数组表示未添加任何外部地址。
 let EXTERNAL_MODELS = [];
 
+// 「模型存放目录」（导入根目录）：string | null。
+// 设置后，用户导入的模型复制到 <importRoot>/<模型目录名>/，并以
+// `petmodels://importroot/...` 直达；未设置时回退到内置 MODELS_DIR。
+// 该字段为 config.json 的 importRoot，是唯一真源（前端不得写入 localStorage）。
+let IMPORT_ROOT = null;
+
 /** 配置文件绝对路径（userData/config.json）；依赖 app ready 后的应用路径解析 */
 function getConfigPath() {
   return path.join(app.getPath('userData'), 'config.json');
@@ -209,40 +215,60 @@ function clearExternalRoots() {
 
 /**
  * 载入配置（须在 app ready 之后调用）。
- * 文件缺失 / JSON 损坏 / 字段非法 → 回退为空列表，绝不抛错。
+ * 文件缺失 / JSON 损坏 / 字段非法 → 回退为默认值，绝不抛错。
  * 兼容迁移：读到旧格式 `externalModelsDir`（string）时转成 [{ id:'r1', path }] 并写回新格式（仅一次）。
  * @returns {Array<{id:string,path:string}>} 生效的外部地址列表
  */
 function loadConfig() {
   EXTERNAL_MODELS = [];
+  IMPORT_ROOT = null;
   try {
     const raw = fs.readFileSync(getConfigPath(), 'utf8');
     const parsed = JSON.parse(raw);
-    if (parsed && Array.isArray(parsed.externalModels)) {
-      EXTERNAL_MODELS = normalizeRoots(parsed.externalModels);
-    } else if (parsed && typeof parsed.externalModelsDir === 'string' && parsed.externalModelsDir.trim()) {
-      // 旧单目录字段 → 数组，并立即写回新格式（迁移一次）
-      EXTERNAL_MODELS = normalizeRoots([{ id: 'r1', path: parsed.externalModelsDir }]);
-      saveConfig();
+    if (parsed && typeof parsed === 'object') {
+      // importRoot：仅接受非空字符串（原样保留，不 trim 存储，避免改动用户真实路径）
+      if (typeof parsed.importRoot === 'string' && parsed.importRoot.trim().length > 0) {
+        IMPORT_ROOT = parsed.importRoot;
+      }
+      if (Array.isArray(parsed.externalModels)) {
+        EXTERNAL_MODELS = normalizeRoots(parsed.externalModels);
+      } else if (typeof parsed.externalModelsDir === 'string' && parsed.externalModelsDir.trim()) {
+        // 旧单目录字段 → 数组，并立即写回新格式（迁移一次）
+        EXTERNAL_MODELS = normalizeRoots([{ id: 'r1', path: parsed.externalModelsDir }]);
+        saveConfig();
+      }
     }
   } catch (_err) {
-    // 文件不存在 / 损坏：保持空列表
+    // 文件不存在 / 损坏：保持默认值（空外部列表 + 未设置 importRoot）
   }
   return EXTERNAL_MODELS;
 }
 
-/** 写回配置（确保 userData 目录存在；失败仅记录日志，不影响运行时行为） */
+/**
+ * 写回配置（确保 userData 目录存在）。
+ * 同时保留既有 `externalModels` 与新增 `importRoot`，不得丢弃任一字段。
+ * @returns {boolean} 是否成功写盘（失败仅记录日志，调用方可据此决定是否上报错误）
+ */
 function saveConfig() {
   try {
     const dir = app.getPath('userData');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       getConfigPath(),
-      JSON.stringify({ externalModels: EXTERNAL_MODELS.map((r) => ({ id: r.id, path: r.path })) }, null, 2),
+      JSON.stringify(
+        {
+          externalModels: EXTERNAL_MODELS.map((r) => ({ id: r.id, path: r.path })),
+          importRoot: IMPORT_ROOT // string | null
+        },
+        null,
+        2
+      ),
       'utf8'
     );
+    return true;
   } catch (err) {
     console.error('[main] 保存配置失败：', err);
+    return false;
   }
 }
 
@@ -491,6 +517,36 @@ function registerIpc() {
     return { ok: true };
   });
 
+  // —— 模型存放目录（importRoot；持久化于 userData/config.json）——
+
+  // 读取当前值（未设置时为 null；读取失败降级为 { ok:false, error }）
+  ipcMain.handle('pet:get-import-root', () => {
+    try {
+      return { ok: true, dir: typeof IMPORT_ROOT === 'string' && IMPORT_ROOT ? IMPORT_ROOT : null };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // 选择：弹目录选择器 → 持久化；取消 → { ok:true, dir:当前值, canceled:true }
+  ipcMain.handle('pet:pick-import-root', (event) => handlePickImportRoot(event));
+
+  // 恢复默认：IMPORT_ROOT = null（幂等）→ { ok:true, dir:null }
+  ipcMain.handle('pet:clear-import-root', () => {
+    const prev = IMPORT_ROOT;
+    try {
+      IMPORT_ROOT = null;
+      if (!saveConfig()) {
+        IMPORT_ROOT = prev; // 写盘失败 → 回滚内存态，避免显示与实际不一致
+        return { ok: false, error: '保存配置失败（无法写入 config.json）' };
+      }
+      return { ok: true, dir: null };
+    } catch (err) {
+      IMPORT_ROOT = prev;
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
   // 扫描模型目录资源：渲染进程在 file:// 下无法枚举目录，改由主进程读取磁盘后回传清单。
   // 入参为模型入口的 URL 或相对 web/ 的路径（如 models/xxx/yyy.model3.json / file:///...）
   // 返回 { ok, motions, expressions, poses, modelDirRel }；失败 { ok:false, error }。
@@ -626,6 +682,27 @@ function scanExternalRootModels() {
 }
 
 /**
+ * 扫描「模型存放目录」（importRoot）的一级子目录（source='imported'）。
+ * 未设置 importRoot，或 importRoot 与内置 MODELS_DIR 相同时返回空数组
+ * （后者已由 scanLocalModels 覆盖，跳过可避免重复项）。
+ * url 形如 `petmodels://importroot/<编码目录名>/<编码入口文件名>`。
+ * 目录不存在 / 不可读 → 跳过，不抛错。
+ * @returns {Array<{id:string,name:string,url:string,type:string,source:string}>}
+ */
+function scanImportRootModels() {
+  if (typeof IMPORT_ROOT !== 'string' || !IMPORT_ROOT.trim()) return [];
+  if (isBuiltinModelsRoot(IMPORT_ROOT)) return [];
+  const items = scanModelsInRoot(
+    IMPORT_ROOT,
+    'imported',
+    (dirName, entryFile) =>
+      `petmodels://importroot/${encodeURIComponent(dirName)}/${encodeURIComponent(entryFile)}`
+  );
+  // 显示名：去 Cubism 型号 / 尾部分版本号，保留 ` (n)` 冲突序号（R5-4）
+  return items.map((item) => ({ ...item, name: deriveDisplayName(item.name) }));
+}
+
+/**
  * 扫描「内置 + 外部（全部根）」模型目录，返回全部发现项（已按 url 去重）。
  * 内置项 url 形如 `models/<dir>/<file>`；外部项 url 形如 `petmodels://external/<id>/<dir>/<file>`。
  * @returns {Array<{id:string,name:string,url:string,type:string,source:string}>}
@@ -661,7 +738,12 @@ function readModelsManifest() {
   // 避免更换/清除外部目录后清单里残留已失效的 petmodels://external/... 条目）。
   // 一并剔除历史遗留的外部条目（早期版本可能写入过）。
   const cleaned = manifest.models.filter(
-    (m) => !(m && typeof m.url === 'string' && m.url.startsWith('petmodels://external/'))
+    (m) =>
+      !(
+        m &&
+        typeof m.url === 'string' &&
+        (m.url.startsWith('petmodels://external/') || m.url.startsWith('petmodels://importroot/'))
+      )
   );
   let changed = cleaned.length !== manifest.models.length;
   manifest.models = cleaned;
@@ -693,26 +775,38 @@ function readModelsManifest() {
     }
   }
 
-  // —— 内存合并外部目录发现项（不写入 models.json）——
+  // —— 内存合并「模型存放目录」与外部目录发现项（均不写入 models.json）——
+  // 顺序：内置（清单 + 目录扫描）→ importRoot → 各外部根；按 url 去重。
   const models = manifest.models.slice();
   const usedIds = new Set(models.map((m) => m && m.id).filter(Boolean));
   const mergedUrls = new Set(
     models.filter((m) => m && typeof m.url === 'string').map((m) => m.url)
   );
-  for (const ext of scanExternalRootModels()) {
-    if (mergedUrls.has(ext.url)) continue;
-    let id = ext.id;
-    // id 与内置（或其它外部）模型冲突时给外部 id 加 `ext-` 前缀，保证列表内 id 唯一
-    if (usedIds.has(id)) {
-      let candidate = `ext-${id}`;
-      let n = 2;
-      while (usedIds.has(candidate)) { candidate = `ext-${id}-${n}`; n += 1; }
-      id = candidate;
+
+  /**
+   * 合并一组扫描结果：url 已存在则跳过；id 冲突时加前缀（`import-` / `ext-`），
+   * 若仍冲突再追加 `-2/-3`…，保证列表内 id 唯一。
+   * @param {Array<{id:string,name:string,url:string,type:string,source:string}>} items
+   * @param {string} prefix
+   */
+  const mergeScanned = (items, prefix) => {
+    for (const item of items) {
+      if (mergedUrls.has(item.url)) continue;
+      let id = item.id;
+      if (usedIds.has(id)) {
+        let candidate = `${prefix}${id}`;
+        let n = 2;
+        while (usedIds.has(candidate)) { candidate = `${prefix}${id}-${n}`; n += 1; }
+        id = candidate;
+      }
+      usedIds.add(id);
+      mergedUrls.add(item.url);
+      models.push({ ...item, id });
     }
-    usedIds.add(id);
-    mergedUrls.add(ext.url);
-    models.push({ ...ext, id });
-  }
+  };
+
+  mergeScanned(scanImportRootModels(), 'import-');
+  mergeScanned(scanExternalRootModels(), 'ext-');
 
   return { ...manifest, models };
 }
@@ -767,6 +861,266 @@ function sanitizeModelFolderName(folderName, version) {
 }
 
 /**
+ * 判断给定根目录是否就是内置模型目录 MODELS_DIR（大小写不敏感）。
+ * @param {string} root
+ * @returns {boolean}
+ */
+function isBuiltinModelsRoot(root) {
+  if (typeof root !== 'string' || !root.trim()) return false;
+  return path.resolve(root).toLowerCase() === path.resolve(MODELS_DIR).toLowerCase();
+}
+
+/**
+ * 判断 target 是否位于 root 之内（含相等；大小写不敏感）。
+ * @param {string} target
+ * @param {string} root
+ * @returns {boolean}
+ */
+function isPathInside(target, root) {
+  if (typeof target !== 'string' || typeof root !== 'string' || !target || !root) return false;
+  const t = path.resolve(target).toLowerCase();
+  const r = path.resolve(root).toLowerCase();
+  if (t === r) return true;
+  const prefix = r.endsWith(path.sep) ? r : r + path.sep;
+  return t.startsWith(prefix);
+}
+
+/**
+ * 返回「实际导入根」：已设置 importRoot（可创建）否则内置 MODELS_DIR。
+ * 目录会被递归创建，故调用方可直接复制文件进去。
+ * @returns {string} 实际导入根绝对路径
+ * @throws {Error} 目录创建失败（磁盘 / 权限）时抛出
+ */
+function getEffectiveImportRoot() {
+  if (typeof IMPORT_ROOT === 'string' && IMPORT_ROOT.trim()) {
+    fs.mkdirSync(IMPORT_ROOT, { recursive: true });
+    return IMPORT_ROOT;
+  }
+  fs.mkdirSync(MODELS_DIR, { recursive: true });
+  return MODELS_DIR;
+}
+
+// ---------------------------------------------------------------------------
+// 导入命名规则（与 Tauri `src-tauri/src/lib.rs` 的同名函数一一对应）
+// ---------------------------------------------------------------------------
+// 目标：不再给导入目录追加 `-cubism4`，而是剥离源目录名尾部的
+//   「Cubism 型号」/「Windows 复制序号 (n)」/「版本号（v1.2 等）」，
+// 同名冲突改用 `base (2)` … `base (99)`，绝不覆盖既有目录。
+
+/** 目录名长度上限（与 resolveImportTargetDir 的截断策略一致） */
+const MODEL_NAME_MAX_LEN = 40;
+/** 冲突序号上限：`(2)` … `(99)` */
+const COPY_SUFFIX_MAX = 99;
+/** `<base> (99)` 的总长度上限，用于截断 base 以保证加序号后仍不超长 */
+const NAME_WITH_SUFFIX_MAX_LEN = 44;
+
+/**
+ * 净化目录名：移除 Windows 非法字符与控制字符；连续空白压缩为 `-`；
+ * 去首尾点 / 空白；超 40 字符截断后再清一次尾部；空则回退 `model`。
+ * @param {string} name 源目录名
+ * @returns {string} 安全目录名
+ */
+function sanitizeModelName(name) {
+  let s = String(name == null ? '' : name)
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]+/g, '') // Windows 非法字符 + C0/C1 控制字符
+    .trim()
+    .replace(/\s+/g, '-'); // 连续空白 → 单个连字符
+  s = s.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+  // 按 Unicode 码点计长（与 Rust `chars().count()` 一致，避免截断代理对）
+  const chars = Array.from(s);
+  if (chars.length > MODEL_NAME_MAX_LEN) {
+    s = chars.slice(0, MODEL_NAME_MAX_LEN).join('').replace(/[.\s]+$/, '');
+  }
+  return s || 'model';
+}
+
+/**
+ * 是否为 Cubism 型号片段（cubism2/3/4/5，大小写不敏感）。
+ * @param {string} seg
+ * @returns {boolean}
+ */
+function isCubismMarker(seg) {
+  const s = String(seg == null ? '' : seg).toLowerCase();
+  return s === 'cubism2' || s === 'cubism3' || s === 'cubism4' || s === 'cubism5';
+}
+
+/**
+ * 是否为版本号片段：可选 `v`/`V` 前缀 + 以 `.` 分隔的全 ASCII 数字段。
+ * 例：`2` / `03` / `v2` / `V1.0` / `1.2.3` → true；`t03` / `v` / `1.` → false。
+ * 注意 `t03` 这类带字母前缀的编号不视为版本号（避免误伤 `haru_greeter_t03`）。
+ * @param {string} seg
+ * @returns {boolean}
+ */
+function isVersionSegment(seg) {
+  let s = String(seg == null ? '' : seg);
+  if (!s) return false;
+  if (s[0] === 'v' || s[0] === 'V') s = s.slice(1);
+  if (!s) return false;
+  const parts = s.split('.');
+  if (parts.some((p) => p.length === 0)) return false; // `1.` / `.1` / `v..1` 均非法
+  return parts.every((p) => /^[0-9]+$/.test(p));
+}
+
+/**
+ * 循环剥离尾部片段：以 `-` / `_` / 空格为分隔符，若最后一段满足谓词则截断，
+ * 直到不满足为止（每轮先去掉尾部 `.` / 空白）。
+ * @param {string} name
+ * @param {(seg:string)=>boolean} predicate
+ * @returns {string}
+ */
+function stripTailSegments(name, predicate) {
+  let cur = String(name == null ? '' : name);
+  for (let guard = 0; guard < 100; guard += 1) {
+    cur = cur.replace(/[.\s]+$/, '');
+    let sepIndex = -1;
+    for (let i = cur.length - 1; i >= 0; i -= 1) {
+      const ch = cur[i];
+      if (ch === '-' || ch === '_' || ch === ' ') {
+        sepIndex = i;
+        break;
+      }
+    }
+    if (sepIndex < 0) return cur;
+    const seg = cur.slice(sepIndex + 1);
+    if (!seg || !predicate(seg)) return cur;
+    cur = cur.slice(0, sepIndex);
+  }
+  return cur;
+}
+
+/**
+ * 循环剥离尾部「Windows 复制序号」：`(1)` … `(999)`（全角/半角括号均支持）。
+ * 要求 `(` 之前存在非空 head；剥离后一并去掉 head 尾部的 `-` / `_` / 空白。
+ * @param {string} name
+ * @returns {string}
+ */
+function stripCopySuffix(name) {
+  // 与 Rust 一致：先去掉尾部的点 / 空白
+  let cur = String(name == null ? '' : name).replace(/[.\s]+$/, '');
+  for (let guard = 0; guard < 100; guard += 1) {
+    const m = /^(.*)[(（](\d{1,3})[)）]$/.exec(cur);
+    if (!m) break;
+    const head = m[1].replace(/[\s_-]+$/, '');
+    if (!head) break;
+    cur = head;
+  }
+  return cur;
+}
+
+/**
+ * 由源目录名派生「导入目录名」：净化 → 最多 8 轮剥离复制序号 / Cubism 型号 / 版本号。
+ * 例：`lafei_4` → `lafei`；`肥牛-cubism4` → `肥牛`；`x-v1.2` → `x`；`foo (1)` → `foo`。
+ * @param {string} raw 源目录名
+ * @returns {string} 导入目录名
+ */
+function deriveBaseModelName(raw) {
+  let name = sanitizeModelName(raw);
+  for (let i = 0; i < 8; i += 1) {
+    const before = name;
+    name = stripCopySuffix(name);
+    name = stripTailSegments(name, isCubismMarker);
+    name = stripTailSegments(name, isVersionSegment);
+    name = name.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+    if (!name) name = 'model';
+    if (name === before) break;
+  }
+  return name || 'model';
+}
+
+/**
+ * 由导入后的实际目录名派生「显示名」：仅剥离 Cubism 型号与版本号，
+ * **保留** `(n)` 冲突序号（便于区分同名副本）；不做 sanitize。
+ * @param {string} dirName 实际目录名
+ * @returns {string} 显示名
+ */
+function deriveDisplayName(dirName) {
+  let name = String(dirName == null ? '' : dirName).trim();
+  for (let i = 0; i < 8; i += 1) {
+    const before = name;
+    name = stripTailSegments(name, isCubismMarker);
+    name = stripTailSegments(name, isVersionSegment);
+    name = name.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+    if (!name) name = 'model';
+    if (name === before) break;
+  }
+  return name || 'model';
+}
+
+/**
+ * 判断两个路径是否指向同一物理目录（先 realpath 解析，失败退化为绝对路径小写比较）。
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function isSamePhysicalDir(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const real = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch (_err) {
+      return path.resolve(p);
+    }
+  };
+  return real(a).toLowerCase() === real(b).toLowerCase();
+}
+
+/**
+ * 解析导入目标目录：
+ *   1. 不存在 → `<root>/<base>`；
+ *   2. 已存在且与源目录为同一物理目录 → 复用（幂等重复导入）；
+ *   3. 已存在但来源不同 → 依次尝试 `<base 截断 39> (2)` … `(99)`，绝不覆盖；
+ *   4. 全部占用 → 抛错。
+ * @param {string} root 导入根目录
+ * @param {string} srcDir 源目录（用户所选模型的所在目录）
+ * @param {string} base 由 deriveBaseModelName 得到的目录名
+ * @returns {{destDir:string, actualName:string}}
+ * @throws {Error} 同名模型过多时抛出
+ */
+function resolveImportTargetDir(root, srcDir, base) {
+  const safeBase = String(base == null ? '' : base).trim() || 'model';
+  const primary = path.join(root, safeBase);
+
+  if (!fs.existsSync(primary)) {
+    return { destDir: primary, actualName: safeBase };
+  }
+  if (isSamePhysicalDir(srcDir, primary)) {
+    // 源目录即目标目录：幂等复用，不复制、不删除
+    return { destDir: primary, actualName: safeBase };
+  }
+
+  // 加序号前把 base 截断到「44 - ' (99)'.length」字符（按码点，与 Rust 一致），并清尾部易混字符
+  const maxBaseLen = NAME_WITH_SUFFIX_MAX_LEN - ' (99)'.length;
+  let truncated = Array.from(safeBase).slice(0, maxBaseLen).join('').replace(/[.\s_-]+$/, '');
+  if (!truncated) truncated = 'model';
+
+  for (let n = 2; n <= COPY_SUFFIX_MAX; n += 1) {
+    const candidateName = `${truncated} (${n})`;
+    const candidateDir = path.join(root, candidateName);
+    if (!fs.existsSync(candidateDir)) {
+      return { destDir: candidateDir, actualName: candidateName };
+    }
+  }
+  throw new Error('同名模型过多（已存在 base (2)…(99)）');
+}
+
+/**
+ * 生成导入模型的 url：
+ *   - 内置根 → `models/<目录名>/<入口文件名>`（与既有清单格式一致，路径段不编码）；
+ *   - 自定义根 → `petmodels://importroot/<编码目录名>/<编码文件名>`。
+ * @param {string} root 实际导入根
+ * @param {string} dirName 导入后的目录名
+ * @param {string} entryFileName 模型入口文件名
+ * @returns {string}
+ */
+function makeImportedModelUrl(root, dirName, entryFileName) {
+  if (isBuiltinModelsRoot(root)) {
+    return `models/${dirName}/${entryFileName}`;
+  }
+  return `petmodels://importroot/${encodeURIComponent(dirName)}/${encodeURIComponent(entryFileName)}`;
+}
+
+/**
+
  * 处理「导入模型」：
  *   选择 .model3.json / .model.json → 复制其所在目录到 web/models/<id>/
  *   → 追加/更新 web/models/models.json → 返回 { ok:true, model:{ id, name, url, type } }。
@@ -794,48 +1148,57 @@ async function handleImportModel(event) {
     const sourceDir = path.dirname(entryPath);
     const entryFileName = path.basename(entryPath);
 
-    // 防御：禁止将应用自身的模型目录复制到其内部（自引用会导致无限递归 / 巨大副本）
-    const modelsRoot = path.resolve(MODELS_DIR);
-    const sourceRoot = path.resolve(sourceDir);
-    if (sourceRoot === modelsRoot || sourceRoot.startsWith(modelsRoot + path.sep)) {
-      return { ok: false, error: '不能导入应用自身的模型目录（models）' };
+    // 导入落点：importRoot（已设置）否则内置 MODELS_DIR
+    let root;
+    try {
+      root = getEffectiveImportRoot();
+    } catch (err) {
+      return { ok: false, error: `创建模型目录失败: ${String((err && err.message) || err)}` };
     }
 
-    fs.mkdirSync(MODELS_DIR, { recursive: true });
-
-    // 生成唯一 id：<原文件夹名>-cubism<2|4>；id 同时作为子目录名，同名冲突时追加 -2 / -3…
     const type = detectModelType(entryFileName);
-    const cubismVersion = detectCubismVersion(entryFileName);
     const folderName = path.basename(sourceDir) || path.basename(entryPath, path.extname(entryPath));
-    const baseId = sanitizeModelFolderName(folderName, cubismVersion);
-    let id = baseId;
-    let destDir = path.join(MODELS_DIR, id);
-    let sequence = 2;
-    while (fs.existsSync(destDir)) {
-      id = `${baseId}-${sequence}`;
-      destDir = path.join(MODELS_DIR, id);
-      sequence += 1;
+    const base = deriveBaseModelName(folderName);
+    const { destDir, actualName } = resolveImportTargetDir(root, sourceDir, base);
+    const model = {
+      id: actualName,
+      name: deriveDisplayName(actualName),
+      url: makeImportedModelUrl(root, actualName, entryFileName),
+      type
+    };
+
+    // 幂等：源目录即目标目录（重复导入同一目录）→ 不复制、不删除，直接返回既有条目。
+    // 必须先于自引用防御：从模型库内部再次导入同一个模型属于合法幂等操作。
+    if (isSamePhysicalDir(sourceDir, destDir)) {
+      return { ok: true, model };
+    }
+
+    // 防御：禁止从应用自身的模型根（内置 models / importRoot / 各外部根）搬移其它目录，
+    // 否则会把模型库里的副本再次复制进模型库（递归副本 / 巨量磁盘占用）。
+    const selfRoots = [MODELS_DIR];
+    if (typeof IMPORT_ROOT === 'string' && IMPORT_ROOT.trim()) selfRoots.push(IMPORT_ROOT);
+    for (const r of EXTERNAL_MODELS) {
+      if (r && r.path) selfRoots.push(r.path);
+    }
+    if (selfRoots.some((r) => isPathInside(sourceDir, r))) {
+      return { ok: false, error: '不能导入应用自身的模型目录（models）' };
     }
 
     // 整目录复制（保留贴图、动作、物理、表情等全部伴随资源）
     fs.cpSync(sourceDir, destDir, { recursive: true });
 
-    const model = {
-      id,
-      name: folderName || entryFileName,
-      url: `models/${id}/${entryFileName}`,
-      type
-    };
-
-    // 追加或更新清单（同 id 覆盖，其余条目保持原样）
-    const manifest = readModelsManifest();
-    const existingIndex = manifest.models.findIndex((m) => m && m.id === id);
-    if (existingIndex >= 0) {
-      manifest.models[existingIndex] = model;
-    } else {
-      manifest.models.push(model);
+    if (isBuiltinModelsRoot(root)) {
+      // 内置根：沿用既有清单持久化（同 id 覆盖，其余条目保持原样）
+      const manifest = readModelsManifest();
+      const existingIndex = manifest.models.findIndex((m) => m && m.id === actualName);
+      if (existingIndex >= 0) {
+        manifest.models[existingIndex] = model;
+      } else {
+        manifest.models.push(model);
+      }
+      writeModelsManifest(manifest);
     }
-    writeModelsManifest(manifest);
+    // 自定义 importRoot：不写 models.json，模型清单由扫描（readModelsManifest）合并
 
     return { ok: true, model };
   } catch (err) {
@@ -867,6 +1230,42 @@ async function handlePickExternalModelsDir(event) {
     return { ok: true, dirs: EXTERNAL_MODELS.slice(), added };
   } catch (err) {
     console.error('[main] 选择外部模型文件夹失败：', err);
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 模型存放目录（importRoot）选择
+// ---------------------------------------------------------------------------
+
+/**
+ * 处理「选择模型存放目录」：弹目录选择器 → 持久化 importRoot → 返回当前值。
+ * 取消时**不修改**配置，返回 `{ ok:true, dir:当前值, canceled:true }`；
+ * 写盘失败时回滚内存态并返回 `{ ok:false, error }`（调用方可展示失败原因）。
+ * @param {Electron.IpcMainInvokeEvent} event
+ * @returns {Promise<{ok:true,dir:string|null,canceled?:boolean}|{ok:false,error:string}>}
+ */
+async function handlePickImportRoot(event) {
+  try {
+    const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow || undefined;
+    const result = await dialog.showOpenDialog(owner, {
+      title: '选择模型存放目录',
+      properties: ['openDirectory', 'createDirectory']
+    });
+
+    if (result.canceled || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
+      return { ok: true, dir: IMPORT_ROOT, canceled: true };
+    }
+
+    const prev = IMPORT_ROOT;
+    IMPORT_ROOT = result.filePaths[0]; // 原样保存用户所选绝对路径
+    if (!saveConfig()) {
+      IMPORT_ROOT = prev;
+      return { ok: false, error: '保存模型存放目录失败（无法写入 config.json）' };
+    }
+    return { ok: true, dir: IMPORT_ROOT };
+  } catch (err) {
+    console.error('[main] 选择模型存放目录失败：', err);
     return { ok: false, error: String((err && err.message) || err) };
   }
 }
@@ -908,6 +1307,20 @@ function resolveModelEntryPath(modelUrlOrPath) {
       const root = findRoot(id);
       if (!root) throw new Error('未设置对应的外部模型地址');
       return path.join(root.path, segs.join('/'));
+    }
+    if (u.hostname === 'importroot') {
+      // 模型存放目录：petmodels://importroot/<目录名>/<入口文件名>
+      if (typeof IMPORT_ROOT !== 'string' || !IMPORT_ROOT.trim()) {
+        throw new Error('未设置模型存放目录（importRoot）');
+      }
+      const base = path.resolve(IMPORT_ROOT);
+      const target = path.resolve(path.join(base, rel));
+      // 安全校验：必须落在 importRoot 之内，禁止 `..` 逃逸
+      const basePrefix = base.endsWith(path.sep) ? base : base + path.sep;
+      if (target !== base && !target.startsWith(basePrefix)) {
+        throw new Error('非法的模型存放目录路径');
+      }
+      return target;
     }
     return path.join(MODELS_PARENT, rel);
   }
@@ -1013,8 +1426,10 @@ function handleScanModelResources(modelUrlOrPath) {
 //   - petmodels://local/<rel>              → 解析到 MODELS_PARENT（内置：URL 形如 local/models/<dir>/<file>）；
 //   - petmodels://external/<id>/<rel>      → 按稳定 id 定位外部根，剩余段拼到该根下
 //                                            （URL 形如 external/r1/<dir>/<file>）；
+//   - petmodels://importroot/<rel>         → 解析到「模型存放目录」IMPORT_ROOT
+//                                            （URL 形如 importroot/<dir>/<file>；未设置 → 404）；
 //   - 未找到对应根 / 其它 host → 404。
-// 两分支均做「解析后必须落在对应根之内」的越权校验。
+// 各分支均做「解析后必须落在对应根之内」的越权校验。
 function registerPetModelsProtocol() {
   protocol.handle('petmodels', (request) => {
     try {
@@ -1034,6 +1449,14 @@ function registerPetModelsProtocol() {
         root = path.resolve(found.path);
         sub = segs.join('/');
         if (!fs.existsSync(root)) return new Response('Not Found', { status: 404 });
+      } else if (host === 'importroot') {
+        // 模型存放目录：petmodels://importroot/<目录名>/<入口文件名>（未设置 → 404）
+        if (typeof IMPORT_ROOT !== 'string' || !IMPORT_ROOT.trim()) {
+          return new Response('Not Found', { status: 404 });
+        }
+        root = path.resolve(IMPORT_ROOT);
+        sub = rel;
+        if (!fs.existsSync(root)) return new Response('Not Found', { status: 404 });
       } else {
         return new Response('Not Found', { status: 404 });
       }
@@ -1041,7 +1464,8 @@ function registerPetModelsProtocol() {
       const abs = path.join(root, sub);
       // 安全校验：解析后的绝对路径必须落在对应根之内，防止 `..` 越权读取
       const resolved = path.resolve(abs);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+      if (resolved !== root && !resolved.startsWith(rootPrefix)) {
         return new Response('Forbidden', { status: 403 });
       }
 
@@ -1189,11 +1613,25 @@ module.exports = {
   detectCubismVersion,
   detectModelType,
   handleScanModelResources,
+  handleImportModel,
   // 外部模型地址相关（便于自动化探针断言，无运行时副作用）
   scanExternalModels,
   readModelsManifest,
   getModelsDir: () => MODELS_DIR,
   getModelsParent: () => MODELS_PARENT,
+  // 模型存放目录（importRoot）相关：命名纯函数与扫描（便于单元式断言）
+  sanitizeModelName,
+  isCubismMarker,
+  isVersionSegment,
+  stripTailSegments,
+  stripCopySuffix,
+  deriveBaseModelName,
+  deriveDisplayName,
+  resolveImportTargetDir,
+  getEffectiveImportRoot,
+  scanImportRootModels,
+  /** 当前 importRoot（未设置为 null） */
+  getImportRoot: () => (typeof IMPORT_ROOT === 'string' && IMPORT_ROOT ? IMPORT_ROOT : null),
   /** 返回全部外部地址（数组） */
   getExternalModels: () => EXTERNAL_MODELS.slice(),
   /** 返回第一个外部地址的 path（未设置时为 null，兼容旧接口） */
@@ -1212,5 +1650,10 @@ module.exports = {
   __setExternalModels: (dirsArray) => {
     EXTERNAL_MODELS = normalizeRoots(dirsArray);
     return EXTERNAL_MODELS.slice();
+  },
+  /** 测试钩子：直接设置 importRoot（不写配置文件），返回生效值 */
+  __setImportRoot: (dir) => {
+    IMPORT_ROOT = typeof dir === 'string' && dir.trim() ? dir : null;
+    return IMPORT_ROOT;
   }
 };

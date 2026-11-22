@@ -15,6 +15,7 @@
  *     - scanModelResources(url) -> Promise<Object|null> 可选（主进程扫描模型目录资源）
  *     - pickExternalModelsDir()/getExternalModelsDirs()/removeExternalModelsDir()/clearExternalModelsDirs() 可选（外部模型地址，多根）
  *     - 兼容旧接口 getExternalModelsDir()/clearExternalModelsDir()
+ *     - getImportRoot()/pickImportRoot()/clearImportRoot() 可选（导入根目录，经 preload IPC）
  *   Tauri (window.__TAURI__)：
  *     - 主窗口 setIgnoreCursorEvents(bool) / setAlwaysOnTop(bool) / close()
  *     - 可选命令：invoke('get_model_list') / invoke('import_model')
@@ -90,6 +91,32 @@ async function tauriInvoke(command, args) {
   }
 }
 
+/**
+ * 调用 Tauri 命令（严格模式：失败时**抛出**，由调用方捕获并展示具体错误）。
+ *
+ * 用于「设置/清空导入根目录」等用户可见操作：失败时必须让用户看到原因
+ * （例如配置不可写、目录被占用），若沿用 {@link tauriInvoke} 的「吞错返回 null」，
+ * 前端只能显示含糊的「已取消 / 失败」，表现为「点了没反应」。
+ *
+ * @param {string} command
+ * @param {object} [args]
+ * @throws {Error} 环境不支持 / 命令执行失败
+ */
+async function tauriInvokeStrict(command, args) {
+  const tauri = getTauriGlobal();
+  if (!tauri) throw new Error('当前环境不支持 Tauri 命令（未检测到 window.__TAURI__）');
+  const core = tauri.core || tauri;
+  const invoke = core && core.invoke;
+  if (typeof invoke !== 'function') throw new Error('Tauri invoke 不可用');
+  try {
+    return await invoke(command, args);
+  } catch (err) {
+    // Tauri invoke 的错误可能是字符串或对象；统一转成可读 Error
+    const msg = err && typeof err === 'object' && err.message ? err.message : String(err);
+    throw new Error(msg);
+  }
+}
+
 /** 统一把同步/异步返回值都收敛为 Promise，避免调用方区分 */
 function toPromise(value) {
   return value && typeof value.then === 'function' ? value : Promise.resolve(value);
@@ -109,7 +136,7 @@ const runtime = detectRuntime();
  * 关键：不能只凭 runtime 判定能力（例如 Electron 未必暴露 importModel/getModelList），
  * 必须逐个检测对应方法是否真实存在于外壳暴露的 API 上。
  *
- * @returns {{interactive:boolean, alwaysOnTop:boolean, quit:boolean, modelList:boolean, importModel:boolean, scanResources:boolean, externalModels:boolean, externalModelsDir:boolean}}
+ * @returns {{interactive:boolean, alwaysOnTop:boolean, quit:boolean, modelList:boolean, importModel:boolean, scanResources:boolean, externalModels:boolean, externalModelsDir:boolean, importRoot:boolean}}
  */
 function deriveCapabilities() {
   if (runtime === 'electron') {
@@ -128,7 +155,12 @@ function deriveCapabilities() {
       // 外部模型地址（多根：挑选追加 / 读取全部 / 删除 / 清空）；
       // 新接口优先，兼容旧单目录接口（pickExternalModelsDir + getExternalModelsDir）
       externalModelsDir: typeof api.pickExternalModelsDir === 'function'
-        && (typeof api.getExternalModelsDirs === 'function' || typeof api.getExternalModelsDir === 'function')
+        && (typeof api.getExternalModelsDirs === 'function' || typeof api.getExternalModelsDir === 'function'),
+      // 导入根目录（模型导入落点的父目录）：Electron 经 preload IPC、Tauri 经 invoke 提供；
+      // 三个方法齐全才视为可用，避免"按钮被启用却空操作"
+      importRoot: typeof api.getImportRoot === 'function'
+        && typeof api.pickImportRoot === 'function'
+        && typeof api.clearImportRoot === 'function'
     };
   }
 
@@ -150,7 +182,9 @@ function deriveCapabilities() {
       importModel: false,
       scanResources: false,
       externalModels: false,
-      externalModelsDir: false
+      externalModelsDir: false,
+      // 导入根目录（lib.rs 的 get/pick/clear_import_root 命令；配置存后端 config.json）
+      importRoot: hasInvoke
     };
   }
 
@@ -163,7 +197,8 @@ function deriveCapabilities() {
     importModel: false,
     scanResources: false,
     externalModels: false,
-    externalModelsDir: false
+    externalModelsDir: false,
+    importRoot: false
   };
 }
 
@@ -513,6 +548,108 @@ async function clearExternalModelsDir() {
 }
 
 /**
+ * 归一「导入根目录」的后端返回值：只接受非空字符串，其余一律视为未设置（null）。
+ *
+ * 契约（C-IPC-IMPORTROOT@1 / C-BRIDGE-IMPORTROOT@1）：后端未设置时返回 null。
+ * 若某外壳版本误返回数字 / 对象 / 空串，前端统一归一为 null，避免把非路径值
+ * 直接显示在设置面板里。注：非空字符串**原样返回**（不做 trim），
+ * 以免改动用户选择的真实路径。
+ *
+ * @param {*} value 后端返回值
+ * @returns {string|null}
+ */
+function normalizeImportRootPath(value) {
+  if (typeof value !== 'string') return null;
+  return value.trim().length > 0 ? value : null;
+}
+
+/**
+ * 读取当前「导入根目录」（导入模型时的落点父目录）。
+ *
+ * 数据真源为外壳后端配置，前端**不缓存、不写 localStorage**。
+ *   - Electron：preload 暴露的 getImportRoot()，读失败时 preload 已返回 null；
+ *   - Tauri：invoke('get_import_root')；
+ *   - 浏览器 / 外壳不支持：降级 null。
+ *
+ * @returns {Promise<string|null>} 绝对路径；未设置或当前外壳不支持 → null
+ */
+async function getImportRoot() {
+  // 外壳未提供该能力：直接返回 null，不发起无谓调用（避免"启用却空操作"）
+  if (!capabilities.importRoot) return null;
+
+  if (runtime === 'electron') {
+    const api = getElectronApi();
+    if (!api || typeof api.getImportRoot !== 'function') return null;
+    try {
+      // 读操作失败按「未设置」降级，不打扰用户
+      return normalizeImportRootPath(await toPromise(api.getImportRoot()));
+    } catch (err) {
+      console.warn('[bridge] getImportRoot 失败:', err);
+      return null;
+    }
+  }
+
+  if (runtime === 'tauri') {
+    return normalizeImportRootPath(await tauriInvoke('get_import_root'));
+  }
+
+  return null;
+}
+
+/**
+ * 弹目录选择器设置「导入根目录」。
+ *
+ * 失败（对话框异常 / 写配置失败）必须让用户看到原因，故 Electron 侧依赖 preload
+ * 抛出的 Error、Tauri 侧走严格模式，均不在本层吞掉。
+ * 用户在对话框中取消时后端返回**当前值**且不修改配置，因此非 null 返回值不代表
+ * 「已更改」，调用方应统一 `refresh()` 重新读取，以配置为准。
+ *
+ * @returns {Promise<string|null>} 选择后（取消时为当前值）的路径；不支持 → null
+ * @throws {Error} 选择/写配置失败
+ */
+async function pickImportRoot() {
+  if (!capabilities.importRoot) return null;
+
+  if (runtime === 'electron') {
+    const api = getElectronApi();
+    if (!api || typeof api.pickImportRoot !== 'function') return null;
+    const value = await toPromise(api.pickImportRoot());
+    return normalizeImportRootPath(value);
+  }
+
+  if (runtime === 'tauri') {
+    return normalizeImportRootPath(await tauriInvokeStrict('pick_import_root'));
+  }
+
+  return null;
+}
+
+/**
+ * 清空「导入根目录」，恢复默认落点（程序目录 models/）。
+ * 失败同样抛 Error，避免出现「点了没反应」的静默失败。
+ *
+ * @returns {Promise<null>} 清空后恒为 null；不支持亦为 null
+ * @throws {Error} 清空/写配置失败
+ */
+async function clearImportRoot() {
+  if (!capabilities.importRoot) return null;
+
+  if (runtime === 'electron') {
+    const api = getElectronApi();
+    if (!api || typeof api.clearImportRoot !== 'function') return null;
+    await toPromise(api.clearImportRoot());
+    return null;
+  }
+
+  if (runtime === 'tauri') {
+    await tauriInvokeStrict('clear_import_root');
+    return null;
+  }
+
+  return null;
+}
+
+/**
  * 统一桥对象（导出给渲染层使用）。
  */
 export const bridge = {
@@ -539,6 +676,10 @@ export const bridge = {
   // 兼容旧接口
   getExternalModelsDir,
   clearExternalModelsDir,
+  // 导入根目录（Electron 经 preload IPC、Tauri 经 invoke）
+  getImportRoot,
+  pickImportRoot,
+  clearImportRoot,
 
   /** 外部模型协议基址（'petmodels://local/'；不可用为空串） */
   modelsBaseUrl,

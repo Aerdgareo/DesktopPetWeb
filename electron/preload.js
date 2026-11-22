@@ -17,6 +17,9 @@
  *   - clearExternalModelsDirs() —— 清空全部外部地址（返回布尔）
  *   - getExternalModelsDir() / clearExternalModelsDir() —— 兼容旧接口（第一个 path / 清空）
  *   - scanModelResources(u)  —— 扫描模型入口目录下的动作/表情/姿势资源（可选能力）
+ *   - getImportRoot()        —— 读取「模型存放目录」（importRoot；未设置为 null）
+ *   - pickImportRoot()       —— 弹目录选择器设置「模型存放目录」（取消时返回当前值；失败抛 Error）
+ *   - clearImportRoot()      —— 恢复默认（清除 importRoot；失败抛 Error）
  *   - modelsBaseUrl          —— 外部模型协议基址（'petmodels://local/'），供渲染层解析模型 URL
  *
  * 渲染进程运行在 contextIsolation=true / nodeIntegration=false 下，
@@ -186,6 +189,59 @@ contextBridge.exposeInMainWorld('petAPI', {
       // 主进程异常时兜底为空结果，避免渲染端 unhandled rejection
       return { ok: false, error: String((err && err.message) || err) };
     }
+  },
+
+  // —— 模型存放目录（importRoot；真源为 userData/config.json）——
+
+  /**
+   * 读取「模型存放目录」当前值（userData/config.json 的 importRoot 字段）。
+   * 未设置时返回 null；主进程读取失败同样降级为 null（不打扰用户）。
+   * @returns {Promise<string|null>}
+   */
+  getImportRoot: async () => {
+    try {
+      const res = await ipcRenderer.invoke('pet:get-import-root');
+      return res && res.ok === true && typeof res.dir === 'string' && res.dir ? res.dir : null;
+    } catch (_err) {
+      return null;
+    }
+  },
+
+  /**
+   * 弹出目录选择器设置「模型存放目录」，成功后立即持久化到 config.json。
+   * 用户取消时主进程不改配置并回传当前值（可能是 null）。
+   * @returns {Promise<string|null>} 设置后（或取消时的当前）目录；未设置为 null
+   * @throws {Error} 主进程返回 { ok:false, error } 或 IPC 异常时抛出
+   */
+  pickImportRoot: async () => {
+    let res;
+    try {
+      res = await ipcRenderer.invoke('pet:pick-import-root');
+    } catch (err) {
+      throw new Error(String((err && err.message) || err));
+    }
+    if (!res || res.ok !== true) {
+      throw new Error(String((res && res.error) || '选择模型存放目录失败'));
+    }
+    return typeof res.dir === 'string' && res.dir ? res.dir : null;
+  },
+
+  /**
+   * 恢复默认：清除「模型存放目录」（importRoot 置为 null），幂等。
+   * @returns {Promise<null>} 恒为 null
+   * @throws {Error} 主进程返回 { ok:false, error } 或 IPC 异常时抛出
+   */
+  clearImportRoot: async () => {
+    let res;
+    try {
+      res = await ipcRenderer.invoke('pet:clear-import-root');
+    } catch (err) {
+      throw new Error(String((err && err.message) || err));
+    }
+    if (!res || res.ok !== true) {
+      throw new Error(String((res && res.error) || '清除模型存放目录失败'));
+    }
+    return null;
   },
 
   // —— 主进程 -> 渲染进程 事件订阅 ——

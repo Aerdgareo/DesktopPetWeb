@@ -54,6 +54,7 @@
 - 待机动作（未声明动作时**扫描目录**自动补齐）
 - **外部模型文件夹**：可添加**多个**外部目录，不改程序即可加载任意磁盘位置的模型
 - 设置面板：缩放（10%–300%）、模型切换、表情/动作选择、置顶/穿透、导入模型、退出
+- **全屏雨效**：小雨 / 中雨 / 大雨 / 雷雨四档（雷雨档含闪电），**雨声音效可独立开关**；雨层不拦截鼠标，配置持久化
 - 系统托盘：显示/隐藏、置顶、开机自启、退出
 - Windows 安装器：默认安装到 `D:\DesktopPet`；模型可提取到**安装目录外部 `models/`** 便于增删
 
@@ -70,6 +71,8 @@
 - 运行依赖/素材：**不受 GPL-3.0-or-later 约束**，务必阅读 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)
   - **Live2D Cubism Core / Cubism 2 Core**：Live2D **专有许可**
   - **用户导入的角色模型**：版权归原作者，请勿提交到公开仓库（本仓库已 `.gitignore` 排除）
+  - **雨声 / 雷声音效**：`web/assets/audio/rain-loop.flac` 取自第三方视频音轨，**非 CC0、不可再分发（仅个人自用）**；
+    `thunder.wav` 为项目内自制 CC0-1.0（来源与许可见 `web/assets/audio/LICENSES.md`）
 - 其他开源依赖：Electron(MIT)、pixi.js(MIT)、pixi-live2d-display(MIT)
 
 ## 致谢
