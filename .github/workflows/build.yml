@@ -24,25 +24,14 @@ permissions:
 
 jobs:
   build:
-    # workflow_dispatch 且 mac_only=true（默认）时仅保留 mac 矩阵组合；win-x64/win-x86/linux 跳过
-    if: ${{ !inputs.mac_only || matrix.tag == 'mac' }}
     strategy:
       fail-fast: false
+      # 「只构建 macOS」在矩阵生成阶段过滤（GitHub 的 job 级 if 不支持 matrix 上下文，
+      # 直接用 matrix.tag 判断会导致 workflow 解析 422 失败）：
+      #   - workflow_dispatch + mac_only=true（默认）→ 只生成 1 个 mac 组合，win/linux 组合不出现、不占 runner
+      #   - tag 推送（inputs 为空 → null 使 && 落空，取 || 右侧）/ mac_only=false → 四平台全量构建，行为不变
       matrix:
-        include:
-          # Windows 拆分为两个独立安装包（x64 / x86），不合并为单一双架构安装器
-          - os: windows-latest
-            tag: win-x64
-            target: --win nsis --x64
-          - os: windows-latest
-            tag: win-x86
-            target: --win nsis --ia32
-          - os: macos-latest
-            tag: mac
-            target: --mac dmg --arm64 --x64
-          - os: ubuntu-latest
-            tag: linux
-            target: --linux AppImage deb
+        include: ${{ fromJSON(inputs.mac_only && '[{"os":"macos-latest","tag":"mac","target":"--mac dmg --arm64 --x64"}]' || '[{"os":"windows-latest","tag":"win-x64","target":"--win nsis --x64"},{"os":"windows-latest","tag":"win-x86","target":"--win nsis --ia32"},{"os":"macos-latest","tag":"mac","target":"--mac dmg --arm64 --x64"},{"os":"ubuntu-latest","tag":"linux","target":"--linux AppImage deb"}]') }}
     runs-on: ${{ matrix.os }}
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
