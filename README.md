@@ -45,9 +45,9 @@ DesktopPetTauri/
 ├── .gitignore
 ├── scripts/
 │   ├── fetch-vendor.mjs        # 拉取 Live2D 内核到 web/vendor/
-│   └── generate-rain-audio.mjs # 生成雷声 WAV（项目内自制，CC0-1.0）；雨声为外部 FLAC，非 CC0
+│   └── generate-rain-audio.mjs # 生成雷声 WAV（项目内自制，CC0-1.0）；雨声为真实录音 FLAC（CC0-1.0）
 ├── web/                        # 前端（本工程自带副本，自包含；详见 web/README.md）
-│   ├── assets/audio/           # rain-loop.flac（外部来源，非 CC0）/ thunder.wav（自制 CC0）+ LICENSES.md
+│   ├── assets/audio/           # rain-loop.flac（Freesound CC0 录音）/ thunder.wav（自制 CC0）+ LICENSES.md
 │   └── src/                    # app/ effects/ interaction/ live2d/ ui/
 └── src-tauri/
     ├── Cargo.toml              # Tauri v2 依赖（tauri / tauri-build / serde / serde_json）
@@ -235,11 +235,12 @@ WebView 收不到任何鼠标事件，也没有「穿透时继续上报鼠标位
 
 | 文件 | 用途 | 时长 / 格式 | 来源 / 许可 |
 | --- | --- | --- | --- |
-| `web/assets/audio/rain-loop.flac` | 循环雨声 | 30.00 s / 44.1 kHz 立体声 FLAC | **外部来源：WE 主题视频《窗外下着雨.mp4》音轨提取；非 CC0，不可再分发** |
+| `web/assets/audio/rain-loop.flac` | 循环雨声 | 15.00 s / 44.1 kHz 立体声 FLAC | **真实录音：Freesound `205958`（作者 bitkar）· CC0-1.0，可再分发** |
 | `web/assets/audio/thunder.wav` | 雷雨档雷声 | 4.00 s / 单声道 32000 Hz 16 bit PCM | 项目内自制（`scripts/generate-rain-audio.mjs` 固定种子合成）；**CC0-1.0** |
 
-- **雨声 `rain-loop.flac` 不是 CC0、也不是公共领域素材**：它取自第三方视频作品的音轨，本项目未取得再分发授权，
-  **仅限个人自用**；公开发布前必须移除或替换（见 `web/assets/audio/LICENSES.md`「替代方案」）。
+- 雨声 `rain-loop.flac` 取自 **Freesound** 的 CC0-1.0 现场录音（<https://freesound.org/people/bitkar/sounds/205958/>），
+  经截取 16.5 s、+14 dB 增益与 1.5 s 等功率交叉淡化处理为 15.00 s **无缝循环**，**不含人声/音乐**；
+  许可为 **CC0-1.0（公共领域贡献宣告）**，可随本项目二进制自由再分发（无需署名）。
 - 雷声 `thunder.wav` 由 `scripts/generate-rain-audio.mjs` 以固定种子程序化合成，**不含任何外部采样**，可复现（重新生成字节一致）。
 - 来源、作者、许可文本、生成日期与 **SHA-256** 的完整记录见 `web/assets/audio/LICENSES.md`；
   第三方声明汇总见 `THIRD-PARTY-NOTICES.md` 的「雨声 / 雷声音效」章节。

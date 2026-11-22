@@ -28,7 +28,7 @@ web/
 ├─ models/
 │  └─ models.json                 # 模型清单（可自行编辑；缺失则用内置演示模型）
 ├─ assets/
-│  └─ audio/                      # 雨声（外部 FLAC，非 CC0）/ 雷声（项目内自制 CC0-1.0）
+│  └─ audio/                      # 雨声（真实录音 FLAC，CC0-1.0）/ 雷声（项目内自制 CC0-1.0）
 │     ├─ rain-loop.flac
 │     ├─ thunder.wav
 │     └─ LICENSES.md              # 来源 / 许可 / SHA-256 记录
@@ -365,13 +365,15 @@ node --check /tmp/inline_0.js && node --check /tmp/inline_1.js
 
 ### 4. 音频资源（`web/assets/audio/`）
 
-- 文件：`rain-loop.flac`（循环雨声，30.00 s，44.1 kHz 立体声 FLAC）与 `thunder.wav`（雷声，4.00 s，单声道 32000 Hz 16 bit PCM）。
+- 文件：`rain-loop.flac`（循环雨声，15.00 s，44.1 kHz 立体声 FLAC，863,830 字节）与 `thunder.wav`（雷声，4.00 s，单声道 32000 Hz 16 bit PCM）。
 - 引用方式：相对 `index.html` 的 `assets/audio/<name>.<ext>`（**不使用 asset 协议**）；代码按 `ogg → mp3 → flac → wav` 顺序探测，
   当前仓库提供 `.flac` 与 `.wav`，因此命中第 3 / 第 4 个候选。
 - 缺失容错：文件缺失/不可播放时**不抛错**，雨照常渲染、音频静音，控制台 `console.warn` 一次。
-- 来源与许可（**两者不同，请分别看待**）：
-  - `rain-loop.flac`：**外部来源，非 CC0**——取自 WE（Wallpaper Engine）主题视频《窗外下着雨.mp4》的音轨，
-    转为 FLAC 并截取 30 s；**本项目未取得再分发授权，仅限个人自用，公开发布前须移除或替换**。
+- 来源与许可（**两者均为 CC0-1.0，可自由再分发**）：
+  - `rain-loop.flac`：**真实环境录音，CC0-1.0**——取自 Freesound 素材 `rain_18_20_16.wav`
+    （sound `205958`，作者 **bitkar**，<https://freesound.org/people/bitkar/sounds/205958/>）；
+    截取其中 16.5 s（该段响度范围仅 1.7 LU）、+14 dB 增益、1.5 s 等功率交叉淡化，
+    处理为 15 s **无缝循环** FLAC，**不含人声/音乐**，可随二进制自由再分发（CC0 不要求署名）。
   - `thunder.wav`：**项目内自制、CC0-1.0**（不含外部采样），由仓库根目录 `scripts/generate-rain-audio.mjs`
     以固定种子合成，可复现（重新生成字节一致）。
   - 逐文件的来源、作者、许可文本、生成日期与 **SHA-256** 见 `assets/audio/LICENSES.md`；

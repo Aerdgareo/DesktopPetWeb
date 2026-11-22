@@ -46,21 +46,24 @@
 
 > 上述开源依赖的完整许可文本随其发行包提供（如 `LICENSES.chromium.html`、`LICENSE.electron.txt` 等）。
 
-## 5. 雨声 / 雷声音效（`web/assets/audio/`，**两个文件许可状况不同，请分别阅读**）
+## 5. 雨声 / 雷声音效（`web/assets/audio/`，**两个文件均为 CC0-1.0，可自由再分发**）
 - 文件：
-  - `web/assets/audio/rain-loop.flac` —— 全屏雨效的**循环雨声**（30.00 s，44.1 kHz 立体声 FLAC，2,496,309 字节）
+  - `web/assets/audio/rain-loop.flac` —— 全屏雨效的**循环雨声**（15.00 s，44.1 kHz 立体声 FLAC，863,830 字节）
   - `web/assets/audio/thunder.wav` —— 雷雨档的**雷声**（4.00 s，单声道 32000 Hz 16 bit PCM，256,044 字节）
-- **⚠️ `rain-loop.flac`：外部来源，非 CC0，再分发有版权风险**
-  - **来源**：从 Windows 桌面美化工程 **WE（Wallpaper Engine）** 的主题素材中提取 ——
-    主题包内视频 `devushka-zasypaet-u-okna_…/窗外下着雨.mp4`（主题归类 **VSTHEMES**），
-    取其音轨转为 FLAC 并截取 30 s 作为循环片段。
-  - **作者**：**未知**（无法确认原始作者与授权状态）。
-  - **许可**：**未知，不适用 CC0 / CC-BY / 公共领域**。本项目**不授予**该文件任何使用、修改或
-    再分发权利，亦无法代表权利人授权。
-  - **风险**：随本项目的 **GPL-3.0-or-later** 二进制一并分发**可能侵犯原作品权利人的著作权/邻接权**，
-    GPLv3 也无法为这份未经授权的第三方素材提供任何豁免。
-  - **强烈建议：仅个人自用**（本地编译、本地运行）。公开发布前请**必须删除**本文件并改用
-    可确认 CC0/Public Domain 或已获授权的替代素材（详见 `web/assets/audio/LICENSES.md`「替代方案」）。
+- **`rain-loop.flac`：真实录音，CC0-1.0**
+  - **来源**：Freesound 素材 `rain_18_20_16.wav`（sound id `205958`）——
+    <https://freesound.org/people/bitkar/sounds/205958/>
+    下载直链为 Freesound 官方 HQ 预览 `205958_3358948-hq.mp3`
+    （<https://cdn.freesound.org/previews/205/205958_3358948-hq.mp3>，44.1 kHz / 立体声 / MP3）；
+    预览仅为母素材的降质编码版本，母素材本体许可即 **CC0-1.0**，故预览及其衍生片段同属 CC0-1.0。
+  - **作者**：**bitkar**（Freesound 用户；CC0-1.0 **不强制署名**，此处仅为善意的来源标注）。
+  - **许可**：**CC0-1.0**（Creative Commons Zero 1.0 Universal，公共领域贡献宣告）
+    <https://creativecommons.org/publicdomain/zero/1.0/legalcode.zh-Hans>；
+    任何人可无条件使用、修改、商用与再分发，**无需署名**。
+  - **处理**：从原素材 78.762 s 中截取 **20.000–36.500 s**（16.5 s，该段响度范围仅 1.7 LU，
+    无爆音/静音/人声/交通事件）→ **+14 dB** 增益（母录音 `-49.6 LUFS`，成品 `-35.5 LUFS`）
+    → **1.5 s 等功率（sin/cos）交叉淡化** → 15.000 s **无缝循环** → FLAC 44.1 kHz / 立体声 / 16 bit。
+  - 该文件为**真实环境录音**，**不含人声、音乐或任何未经授权的第三方作品音轨**。
 - **`thunder.wav`：项目内自制，CC0-1.0**
   - **来源**：无外部来源，由 `scripts/generate-rain-audio.mjs`（Node，无第三方依赖，固定随机种子
     `0x7e3b9f21`）程序化合成，**不包含任何外部采样、循环包或第三方录音片段**。
@@ -73,30 +76,30 @@
 
   | 文件 | SHA-256 | 许可 / 可再分发 |
   | --- | --- | --- |
-  | `rain-loop.flac` | `181ac8801e330aa45d203fdf9dec9ae7aa119a48750693e049ee4ee973664150` | 未知 / 非 CC0 —— **否，有版权风险** |
+  | `rain-loop.flac` | `ed56ac2723c6337943ff4a044cc7b793ef74a706f05e7eca2fe86fdb2bb1fcc4` | CC0-1.0 —— **是** |
   | `thunder.wav` | `105fba55e52c99930ed440591d3e9cf6f4c546249ba5f6e3c27bd47369b95f15` | CC0-1.0 —— 是 |
 
 - **再分发声明**：
   - `thunder.wav`：允许在 **GPL-3.0-or-later** 项目中随二进制再分发（CC0-1.0 无附加条件，
     与本项目自身源码的 GPL-3.0-or-later 兼容，不构成额外限制）。
-  - `rain-loop.flac`：**不允许再分发**。如需发布，请先替换（见上）。
+  - `rain-loop.flac`：**允许再分发**。素材为 CC0-1.0（公共领域贡献宣告），
+    不保留署名、商用或衍生限制，可随本项目二进制/安装包自由分发。
 - **复现与校验**：
 
   ```bash
-  # 校验现有文件（rain-loop.flac 无法由脚本复现，仅 thunder.wav 可复现）
+  # 校验现有文件（rain-loop.flac 由 CC0 录音裁剪，无法字节级复现；thunder.wav 可复现）
   sha256sum web/assets/audio/rain-loop.flac web/assets/audio/thunder.wav
 
   # 重新生成雷声（固定种子 → 字节与上表 SHA-256 一致）
   node scripts/generate-rain-audio.mjs --only thunder
 
-  # 替代方案：生成自制 CC0 雨声 WAV（仅在你主动替换素材时使用；需先删除 rain-loop.flac）
-  node scripts/generate-rain-audio.mjs --only rain
+  # 如需重新处理雨声：从上面的 Freesound CDN 直链下载后按 LICENSES.md §1「处理流程」裁剪
   ```
 
 - **完整记录**：文件名、来源、作者、许可文本、获取/生成日期、SHA-256、再分发声明与技术参数
   的逐文件记录见 `web/assets/audio/LICENSES.md`；如替换音频，须同步更新该文件与本节的 SHA-256。
 - **打包方式**：音频位于 `web/` 之下，随 Tauri 的 `frontendDist`（`../web`）内嵌进单 exe，
-  无需额外分发文件；因此上述版权风险同样存在于发布出来的单 exe 中。
+  无需额外分发文件；两份音频均为 CC0-1.0，可随发布出来的单 exe 自由分发。
 
 ## 建议做法（公开发行前）
 1. 本仓库**随附**角色模型（`web/models/`）与源码；`web/vendor/*` 的 Live2D Core 仍由 `npm run fetch-vendor` 拉取、**不入库**。
